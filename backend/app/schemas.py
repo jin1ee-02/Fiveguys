@@ -63,10 +63,7 @@ class ModelFeatures(StrictModel):
 
 
 class LightOutput(ModelFeatures):
-    """Light path: signals, expressed emotion and alternatives from one call."""
-
-    toxic: bool
-    alternatives: list[str]
+    """Light path: conflict signals and expressed emotion from one call. Alternatives come from their own call (AlternativesOutput)."""
 
 
 class FeatureScores(ModelFeatures):
@@ -145,6 +142,8 @@ class ReactionResult(StrictModel):
 
 # Simple schemas for generation; validate all model-controlled fields afterwards.
 class AlternativesOutput(StrictModel):
+    # Written before the alternatives so they stay the target speaker's own point (who says what to whom); not returned to the client.
+    intent: str = ""
     alternatives: list[str]
 
 

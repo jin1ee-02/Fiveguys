@@ -102,14 +102,11 @@ class OpenAIProvider:
         )
 
     def light(self, request: ConversationInput) -> tuple[FeatureScores, list[str]]:
-        """Light path: signals + expressed emotion + alternatives in a single call."""
+        """Light path: signals + expressed emotion in a single call. Alternatives are requested separately, only when needed."""
         from app.runtime import analysis_cache
         def operation():
-            result = self.structured(LIGHT_PROMPT, json.loads(self._payload(request)), LightOutput, 900)
-            features = FeatureScores.model_validate({**result.model_dump(exclude={"toxic", "alternatives"}), "model_version": f"openai/{self.model}"})
-            alternatives = [value.strip() for value in result.alternatives]
-            valid = len(alternatives) == 3 and len(set(alternatives)) == 3 and all(value and len(value) <= 2000 and value != request.text.strip() for value in alternatives)
-            return features, alternatives if result.toxic and valid else []
+            result = self.structured(LIGHT_PROMPT, json.loads(self._payload(request)), LightOutput, 500)
+            return FeatureScores.model_validate({**result.model_dump(), "model_version": f"openai/{self.model}"}), []
         if not getattr(self, "cache_enabled", False):
             return operation()
         return analysis_cache.call([PROMPT_VERSION, self.model, "light", self._payload(request)], operation)

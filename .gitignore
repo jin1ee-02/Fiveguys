@@ -13,3 +13,5 @@ dist/
 backend/data/
 frontend/.npm-cache/
 tmp/
+# 시연 녹화본(약 46MB)은 저장소에 올리지 않는다
+시연영상/*.webm

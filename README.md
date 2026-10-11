@@ -51,15 +51,16 @@ TYPESAFE_API_KEY=...         # 선택. 넣으면 LLM + JEV 하이브리드 분�
 2. 상대는 **다른 브라우저나 시크릿 창, 또는 다른 기기**에서 `코드로 참가하기`를 누릅니다. 같은 브라우저의 두 탭은 저장소를 공유해 한 사람으로 취급됩니다.
 3. 휴대폰에서 접속하려면 `frontend/.env`의 `EXPO_PUBLIC_API_URL`에 PC의 LAN 주소를 쓰고, `.\scripts\start-backend.ps1 -BindAddress 0.0.0.0`으로 서버를 띄우고, `backend/.env`의 `CORS_ORIGINS`에 그 웹 주소를 추가합니다.
 
-## 확인 상태 (2026-10-08)
+## 확인 상태 (2026-10-11)
 
 ```bash
 cd backend
-python -m unittest discover -s tests     # 42개 통과
+python -m unittest discover -s tests     # 43개 통과
 cd ../frontend
 npx tsc --noEmit && npx expo lint && npm test   # 타입, 린트, 단위 테스트 5개 통과
 ```
 
-- 실제 모델(`gpt-4o-mini`)로 메시지 분석, 순화, 상대 반응, 판결을 실행해 확인했습니다. 측정 결과는 기능 명세서 5.5, 8.5, 11장에 있습니다.
+- 실제 모델(`gpt-4o-mini`)로 메시지 분석, 순화, 상대 반응, 판결을 실행해 확인했습니다. 측정 결과는 기능 명세서 5.5, 5.6, 8.5, 11장에 있습니다.
+- 10월 11일에 순화 대안이 초안과 무관하게 비슷해지고 화자가 뒤바뀌던 문제를 고쳤습니다(대안을 전용 호출로 분리, 프롬프트 `ku-mvp-ko-v5`). 전후 측정은 기능 명세서 5.6에 있습니다.
 - TypeSafe JEV 실제 호출, 실제 휴대폰 기기 실행, 사람이 라벨링한 대화로의 정확도 평가는 아직 하지 않았습니다.
 - 단일 서버(`--workers 1`), 2초 폴링 구성이며 로그인·WebSocket·운영 배포는 범위 밖입니다.

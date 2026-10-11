@@ -132,7 +132,8 @@ def analyze_message(request: ConversationInput, provider: Analyzer) -> MessageRe
 def analyze_draft(request: DraftInput, provider: Analyzer, generation: GenerationFactory) -> DraftResult:
     """Analyze an unsent draft without changing the conversation temperature."""
     try:
-        # Light path: the single call already carries alternatives when the model saw a problem.
+        # Light path scores the draft; an OpenAI analyzer returns no alternatives here and they are written by the
+        # dedicated call below once a suggestion is due (offline rules and tests may still hand them back directly).
         features, alternatives = light_analysis(request, provider)
         risk = conflict_score(features)
         threshold = max(15, min(90, round(rewrite_threshold(request.previous_temperature) + relationship_offset(request.relationship) - (request.sensitivity - 0.5) * 40)))
