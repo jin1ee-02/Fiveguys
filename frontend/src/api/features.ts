@@ -73,14 +73,6 @@ export async function requestVerdict(input: VerdictRequest, signal?: AbortSignal
   return validateVerdict(await requestJson<Omit<VerdictResult, 'source'>>('/v1/verdicts', { ...input, request_id: input.request_id ?? newRequestId() }, { signal, timeoutMs: 420_000 }));
 }
 
-export async function appealVerdict(verdictId: string, text: string, snapshot: VerdictRequest, signal?: AbortSignal, requestId = newRequestId()): Promise<VerdictResult> {
-  if (FEATURE_SOURCE === 'mock') {
-    await previewDelay(1800, signal);
-    return mockVerdict(snapshot, text);
-  }
-  return validateVerdict(await requestJson<Omit<VerdictResult, 'source'>>(`/v1/verdicts/${encodeURIComponent(verdictId)}/appeals`, { text, request_id: requestId }, { signal, timeoutMs: 420_000 }));
-}
-
 export async function previewReaction(input: ReactionRequest, signal?: AbortSignal): Promise<ReactionResult> {
   if (FEATURE_SOURCE === 'mock') {
     await previewDelay(200, signal);

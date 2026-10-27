@@ -140,7 +140,7 @@ class OfflineProvider:
             gap = (getattr(a, angle) - getattr(b, angle)) / 100 if angle else (total(a) - total(b)) / 300
             belief = round(max(0.15, min(0.85, 0.5 + gap)), 2)
             return JudgeOutput(plaintiff=a, defendant=b, unresolved=False, belief=belief,
-                               summary=f"{josa(topic, '을', '를')} 둘러싼 갈등입니다. 약속의 중요성을 말한 쪽과 사정을 설명한 쪽 모두 이해할 수 있는 지점이 있고, 표현 방식에서 감정이 커졌습니다." + (" 제출된 반론은 추가 주장으로 함께 검토했습니다." if case.get("appeals") else ""),
+                               summary=f"{josa(topic, '을', '를')} 둘러싼 갈등입니다. 약속의 중요성을 말한 쪽과 사정을 설명한 쪽 모두 이해할 수 있는 지점이 있고, 표현 방식에서 감정이 커졌습니다.",
                                recommendation=f"{josa(topic, '을', '를')} 언제 누가 할지 구체적으로 정하고, 지키기 어려우면 먼저 알려주기로 약속해보세요.",
                                humor=f"오늘의 메인 이벤트는 {topic}! 링 위의 말싸움은 잠시 내려놓고 태그팀으로 해결해볼까요?" if case.get("mode") == "WWE" else "")
         raise NotImplementedError(schema)

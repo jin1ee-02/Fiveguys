@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { router } from 'expo-router';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { appealVerdict, FEATURE_SOURCE, requestVerdict } from '../api/features';
+import { FEATURE_SOURCE, requestVerdict } from '../api/features';
 import { newRequestId } from '../api/client';
 import { getSavedVerdict, getVerdictHistory } from '../api/rooms';
-import { ScoreCard } from '../components/features/ScoreCard';
+import { RubricTable, ScoreCard, SCORE_ITEMS } from '../components/features/ScoreCard';
 import { SourceBadge } from '../components/features/SourceBadge';
 import { ActionButton, colors, ui } from '../components/ui';
 import { useChat } from '../state/ChatContext';
@@ -20,18 +20,17 @@ export default function VerdictScreen() {
   const [stage, setStage] = useState<'form' | 'loading' | 'result' | 'error'>(lastVerdict ? 'result' : 'form');
   const [mode, setMode] = useState<VerdictMode>(lastVerdict?.snapshot.mode ?? 'WWE');
   const [context, setContext] = useState('');
-  const [appeal, setAppeal] = useState('');
   const [error, setError] = useState('');
   const [step, setStep] = useState(0);
   const [showLog, setShowLog] = useState(false);
   const [showStrategy, setShowStrategy] = useState(false);
   const [showCore, setShowCore] = useState(false);
   const [showContext, setShowContext] = useState(false);
-  const [isAppeal, setIsAppeal] = useState(false);
+  const [showRubric, setShowRubric] = useState(false);
   const controller = useRef<AbortController | null>(null);
   const running = useRef(false);
   const finishInteraction = useRef<(() => void) | null>(null);
-  const lastAttempt = useRef<{ input: VerdictRequest; appealText?: string; verdictId?: string; requestId: string } | null>(null);
+  const lastAttempt = useRef<{ input: VerdictRequest; requestId: string } | null>(null);
   const recent = messages.slice(-10);
   const hasBoth = recent.some((turn) => turn.speaker === 'A') && recent.some((turn) => turn.speaker === 'B');
   const result = lastVerdict?.result;
@@ -49,7 +48,7 @@ export default function VerdictScreen() {
     return () => clearInterval(timer);
   }, [stage]);
 
-  async function run(input: VerdictRequest, appealText?: string, verdictId?: string, requestId = newRequestId()) {
+  async function run(input: VerdictRequest, requestId = newRequestId()) {
     if (running.current) return;
     controller.current?.abort();
     const requestController = new AbortController();
@@ -57,12 +56,12 @@ export default function VerdictScreen() {
     const finish = beginInteraction();
     finishInteraction.current = finish;
     input = { ...input, request_id: requestId };
-    lastAttempt.current = { input, appealText, verdictId, requestId };
-    setStage('loading'); setError(''); setStep(0); setIsAppeal(!!appealText);
+    lastAttempt.current = { input, requestId };
+    setStage('loading'); setError(''); setStep(0);
     try {
-      const data = appealText && verdictId ? await appealVerdict(verdictId, appealText, input, requestController.signal, requestId) : await requestVerdict(input, requestController.signal);
+      const data = await requestVerdict(input, requestController.signal);
       if (!requestController.signal.aborted) {
-        setLastVerdict({ result: data, snapshot: input }); setHistory((current) => [data, ...current.filter((item) => item.verdictId !== data.verdictId)].slice(0, 20)); setAppeal(''); setShowLog(false); setStage('result');
+        setLastVerdict({ result: data, snapshot: input }); setHistory((current) => [data, ...current.filter((item) => item.verdictId !== data.verdictId)].slice(0, 20)); setShowLog(false); setStage('result');
       }
     } catch (cause) {
       if (!requestController.signal.aborted) { setError(cause instanceof Error ? cause.message : '판결을 받지 못했어요.'); setStage('error'); }
@@ -74,7 +73,7 @@ export default function VerdictScreen() {
     run({ room_id: session?.roomId ?? 'presentation-room', requester: session?.speaker ?? speaker, mode, relationship, context: context.trim(), recent_messages: recent.map(({ speaker, text }) => ({ speaker, text })) });
   }
   function cancel() { controller.current?.abort(); finishInteraction.current?.(); running.current = false; setStage(lastVerdict ? 'result' : 'form'); }
-  function retry() { const attempt = lastAttempt.current; if (attempt) run(attempt.input, attempt.appealText, attempt.verdictId, attempt.requestId); }
+  function retry() { const attempt = lastAttempt.current; if (attempt) run(attempt.input, attempt.requestId); }
 
   async function reopen(verdictId: string) {
     if (running.current) return;
@@ -94,7 +93,7 @@ export default function VerdictScreen() {
   return (
     <ScrollView style={ui.page} contentContainerStyle={ui.content} keyboardShouldPersistTaps="handled">
       <View style={[ui.row, { justifyContent: 'space-between' }]}><Text style={ui.eyebrow}>KU래쪄용 · 다툼판결</Text><ActionButton title="채팅으로" secondary onPress={() => { controller.current?.abort(); router.replace('/chat'); }} style={styles.smallButton} /></View>
-      <Text style={ui.title}>{stage === 'result' ? '서로의 입장을 살펴봤어요' : stage === 'loading' ? isAppeal ? '반론을 살펴보는 중' : '다툼을 살펴보는 중' : '잠깐, 판결을 부탁해요'}</Text>
+      <Text style={ui.title}>{stage === 'result' ? '서로의 입장을 살펴봤어요' : stage === 'loading' ? '다툼을 살펴보는 중' : '잠깐, 판결을 부탁해요'}</Text>
       <Text style={ui.subtitle}>논리력 · 감정 조절 · 근거를 비교하고 대화를 이어갈 방법을 정리합니다.</Text>
       <SourceBadge source={FEATURE_SOURCE} provider={aiProvider} />
 
@@ -113,7 +112,7 @@ export default function VerdictScreen() {
 
       {stage === 'loading' && <View style={ui.card}>
         <ActivityIndicator size="large" color={colors.primary} accessibilityLabel="판결 응답 대기 중" />
-        <Text style={ui.label}>{isAppeal ? '기존 대화와 반론을 함께 확인합니다.' : '잠시만 기다려주세요.'}</Text>
+        <Text style={ui.label}>잠시만 기다려주세요.</Text>
         {FEATURE_SOURCE === 'mock' ? <>{phases.map((phase, index) => <Text key={phase} style={[ui.subtitle, index === step && { color: colors.primary, fontWeight: '800' }]}>{index < step ? '✓' : index === step ? '●' : '○'} {phase}</Text>)}<Text style={styles.caption}>발표용 진행 연출입니다. 실제 AI 토론이 실행되는 것은 아닙니다.</Text></> : <Text style={ui.subtitle}>대화를 쟁점·입장·사실관계로 정리한 뒤 검사 · 변호사 · 팩트체크가 토론하고 관점이 다른 심사위원단이 채점합니다. 판단이 안정되면 일찍 끝나요.</Text>}
         <ActionButton title="요청 취소" secondary onPress={cancel} />
       </View>}
@@ -123,6 +122,16 @@ export default function VerdictScreen() {
       {stage === 'result' && result && <>
         <View style={styles.resultHeader}><Text style={ui.eyebrow}>{result.mode} · {lastVerdict.snapshot.relationship}</Text><Text style={ui.subtitle}>요청한 대화 {lastVerdict.snapshot.recent_messages.length}개 기준</Text><SourceBadge source={result.source} provider={result.provider} /></View>
         <View style={styles.scores}><ScoreCard title={session?.speaker === 'B' ? '상대 (A)' : '나 (A)'} score={result.plaintiff} /><ScoreCard title={session?.speaker === 'B' ? '나 (B)' : '상대 (B)'} score={result.defendant} accent="#397596" /></View>
+        <View style={ui.card}>
+          <Text style={ui.label}>점수는 이렇게 매겨졌어요</Text>
+          <Text style={styles.caption}>A는 A가 보낸 메시지만, B는 B가 보낸 메시지만 채점합니다. 심사위원이 항목마다 실제 발화를 인용한 근거를 먼저 쓰고, 그 근거가 속한 구간 안에서 점수를 정합니다. 카드의 점수는 심사위원{result.panelScores?.length ? ` ${result.panelScores.length}명` : '단'}의 평균이고, 근거 문장은 평균에 가장 가까운 점수를 준 심사위원의 것입니다. 두 모드(WWE·UFC)의 기준은 같습니다.</Text>
+          {result.panelScores && result.panelScores.length > 0 && <View style={{ gap: 4 }}>
+            <Text style={ui.eyebrow}>심사위원별 점수 (논리력 / 감정 조절 / 근거)</Text>
+            {result.panelScores.map((panel) => <Text key={panel.persona} style={styles.caption}>{personas[panel.persona] ?? panel.persona} · A {SCORE_ITEMS.map(({ key }) => Math.round(panel.plaintiff[key])).join(' / ')} · B {SCORE_ITEMS.map(({ key }) => Math.round(panel.defendant[key])).join(' / ')} · A 쪽으로 {Math.round(panel.belief * 100)}%</Text>)}
+          </View>}
+          <ActionButton title={showRubric ? '채점 기준 접기' : '채점 기준 보기'} secondary onPress={() => setShowRubric(!showRubric)} />
+          {showRubric && <RubricTable />}
+        </View>
         {result.rounds && <Text style={styles.caption}>{result.rounds}라운드 · {result.stopReason === 'stable' ? '판단이 안정되어 조기 종료' : '설정된 최대 라운드로 종료'}{result.modelCalls ? ` · 모델 호출 ${result.modelCalls}회` : ''}{result.usage ? ` · 입력 ${Math.round(result.usage.inputTokens)}토큰(캐시 ${Math.round(result.usage.cachedTokens)}) · ${Math.round(result.usage.seconds)}초` : ''} · 대화 버전 {result.snapshotVersion}</Text>}
         {result.roundTrace && result.roundTrace.length > 0 && <View style={ui.card}>
           <Text style={ui.label}>라운드별 판단 변화{result.judges && result.judges > 1 ? ` · 심사위원 ${result.judges}명` : ''}</Text>
@@ -146,7 +155,6 @@ export default function VerdictScreen() {
         <View style={ui.card}><Text style={ui.label}>판결 요약</Text><Text style={ui.subtitle}>{result.summary}</Text><Text style={ui.eyebrow}>다음 대화를 위한 제안</Text><Text style={ui.subtitle}>{result.recommendation}</Text></View>
         {result.humor ? <View style={[ui.card, { backgroundColor: '#FFF8DA' }]}><Text style={ui.label}>한 줄로 돌아보기</Text><Text style={ui.subtitle}>{result.humor}</Text></View> : null}
         <View style={ui.card}><ActionButton title={showLog ? '토론 과정 접기' : '토론 과정 보기'} secondary onPress={() => setShowLog(!showLog)} />{showLog && <><Text style={styles.caption}>{result.source === 'mock' ? '역할별 발언의 UI 예시입니다.' : '역할별 에이전트가 순서대로 주고받은 발언입니다.'}</Text><ActionButton title={showStrategy ? '발언 전 전략 숨기기' : '발언 전 전략도 보기'} secondary onPress={() => setShowStrategy(!showStrategy)} />{result.debateLog.map((entry, index) => <View key={`${entry.role}-${index}`} style={styles.turn}><Text style={ui.eyebrow}>{entry.persona ? personas[entry.persona] : roles[entry.role]} · {entry.round}라운드{typeof entry.belief === 'number' ? ` · A 쪽으로 ${Math.round(entry.belief * 100)}%` : ''}</Text>{showStrategy && entry.strategy ? <Text style={styles.strategy}>전략: {entry.strategy}</Text> : null}<Text style={ui.subtitle}>{entry.text}</Text>{entry.evidenceIndices && entry.evidenceIndices.length > 0 ? <Text style={styles.caption}>근거: {entry.evidenceIndices.map((i) => i + 1).join(', ')}번 메시지</Text> : null}</View>)}</>}</View>
-        <View style={ui.card}><Text style={ui.label}>다른 사정이 있나요? 반론하기</Text><Text style={ui.subtitle}>누락된 사실이나 내 입장을 보충해주세요. 같은 대화에 반론을 더해 다시 확인합니다.</Text><TextInput accessibilityLabel="판결에 대한 반론" style={styles.input} multiline maxLength={2000} value={appeal} onChangeText={setAppeal} placeholder="예: 지난 두 번도 내가 대신 청소했어요." placeholderTextColor={colors.muted} /><Text style={styles.caption}>{appeal.length} / 2000</Text><ActionButton title="반론 제출하고 다시 보기" disabled={!appeal.trim()} onPress={() => run(lastVerdict.snapshot, appeal.trim(), result.verdictId)} /></View>
         <ActionButton title="새 대화로 판결 요청하기" secondary onPress={() => { setContext(''); setShowContext(false); setStage('form'); }} />
         <ActionButton title="대화 이어가기" onPress={() => router.replace('/chat')} />
       </>}

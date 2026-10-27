@@ -116,11 +116,13 @@ class PipelineTests(unittest.TestCase):
         self.assertIsNotNone(self.store.core(self.room))
         # Same request id replays the stored verdict instead of debating again.
         self.assertEqual(self.client.post("/v1/verdicts", json=request, headers=self.headers("A")).json()["verdictId"], body["verdictId"])
-        appeal = self.client.post(f"/v1/verdicts/{body['verdictId']}/appeals", json={"text": "지난 두 번도 제가 대신 청소했어요.", "request_id": "ap1"}, headers=self.headers("B"))
-        self.assertEqual(appeal.status_code, 200, appeal.text)
-        self.assertEqual(appeal.json()["parentVerdictId"], body["verdictId"])
-        self.assertEqual(appeal.json()["modelCalls"], 12)
-        self.assertEqual(len(self.client.get(f"/v1/rooms/{self.room}/verdicts", headers=self.headers("B")).json()), 2)
+        # The card shows the panel mean; each judge's own scores come along so the mean can be traced.
+        self.assertEqual([p["persona"] for p in body["panelScores"]], ["logic", "empathy", "evidence"])
+        mean = sum(p["plaintiff"]["logic"] for p in body["panelScores"]) / 3
+        self.assertAlmostEqual(body["plaintiff"]["logic"], round(mean, 1))
+        # The appeal feature was removed.
+        self.assertEqual(self.client.post(f"/v1/verdicts/{body['verdictId']}/appeals", json={"text": "x", "request_id": "ap1"}, headers=self.headers("B")).status_code, 404)
+        self.assertEqual(len(self.client.get(f"/v1/rooms/{self.room}/verdicts", headers=self.headers("B")).json()), 1)
 
     def test_debate_continues_while_judge_belief_moves_and_agents_rebut(self):
         request = VerdictInput(room_id="r", requester="A", mode="UFC", relationship="친구", recent_messages=[{"speaker": "A", "text": "늦었네"}, {"speaker": "B", "text": "미안"}], request_id="r")

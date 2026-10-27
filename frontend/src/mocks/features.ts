@@ -50,20 +50,25 @@ export function mockEmotion(input: EmotionRequest): EmotionResult {
   };
 }
 
-export function mockVerdict(input: VerdictRequest, appeal?: string): VerdictResult {
+export function mockVerdict(input: VerdictRequest): VerdictResult {
   return {
     verdictId: `preview-${Date.now()}`,
     mode: input.mode,
     plaintiff: { logic: 72, emotionControl: 45, evidence: 80, logicReason: '약속과 반복된 상황을 이유로 든 예시입니다.', emotionControlReason: '일반화 표현이 있었다는 예시입니다.', evidenceReason: '상대도 인정한 약속을 언급했다는 예시입니다.', strength: '구체적인 약속과 반복된 상황을 짚었습니다.', improvement: '상대를 일반화하는 표현을 줄이면 요청이 더 잘 전달됩니다.' },
     defendant: { logic: 50, emotionControl: 78, evidence: 35, logicReason: '사정은 말했지만 이유가 짧았다는 예시입니다.', emotionControlReason: '사과하며 차분히 답했다는 예시입니다.', evidenceReason: '확인할 수 있는 사실이 적었다는 예시입니다.', strength: '상황을 설명하며 대화를 이어가려고 했습니다.', improvement: '약속을 지키기 어려웠다면 미리 공유하는 방식이 필요합니다.' },
-    summary: appeal ? '반론을 포함한 결과 화면 예시입니다. 양쪽 관점과 합의점을 다시 확인합니다.' : '약속을 지키는 것과 사정을 설명하는 것 모두 중요해요. 책임을 따지기 전에 다음 약속을 구체적으로 정해보세요.',
+    summary: '약속을 지키는 것과 사정을 설명하는 것 모두 중요해요. 책임을 따지기 전에 다음 약속을 구체적으로 정해보세요.',
+    panelScores: [
+      { persona: 'logic', belief: 0.65, plaintiff: { logic: 75, emotionControl: 45, evidence: 80 }, defendant: { logic: 50, emotionControl: 75, evidence: 35 } },
+      { persona: 'empathy', belief: 0.6, plaintiff: { logic: 70, emotionControl: 40, evidence: 80 }, defendant: { logic: 50, emotionControl: 80, evidence: 35 } },
+      { persona: 'evidence', belief: 0.7, plaintiff: { logic: 71, emotionControl: 50, evidence: 80 }, defendant: { logic: 50, emotionControl: 79, evidence: 35 } },
+    ],
     recommendation: '가능한 시간과 할 일을 함께 정하고, 일정이 바뀌면 먼저 알려주기로 합의해보세요.',
     humor: input.mode === 'WWE' ? '오늘의 메인 이벤트는 청소! 링 위의 말싸움은 내려놓고 빗자루를 같이 들어볼까요?' : '이번 라운드는 잠시 휴식. 다음 라운드는 서로의 이야기를 끝까지 듣기로 해요.',
     debateLog: [
       { role: 'prosecutor', round: 1, strategy: '반복된 약속 불이행을 먼저 짚는 전략 예시입니다.', text: '약속이 반복해서 지켜지지 않은 점을 검토하는 발언 예시입니다.' },
       { role: 'defense', round: 1, text: '상대의 사정과 대안을 함께 살펴보는 발언 예시입니다.' },
       { role: 'factcheck', round: 1, text: '대화에 확인된 사실과 추측을 구분하는 발언 예시입니다.' },
-      { role: 'judge', round: 1, text: appeal ? '추가 반론이 접수된 상황의 판사 발언 예시입니다.' : '양쪽의 강점과 개선할 점을 정리하는 발언 예시입니다.' },
+      { role: 'judge', round: 1, text: '양쪽의 강점과 개선할 점을 정리하는 발언 예시입니다.' },
     ],
     source: 'mock',
   };

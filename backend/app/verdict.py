@@ -12,7 +12,7 @@ from fastapi import HTTPException
 from app.prompts import CORE_STATE_PROMPT, DEBATE_PROMPT, JUDGE_PROMPT, PROMPT_VERSION
 from app.provider import ModelOutputError
 from app.runtime import usage_log, usage_total
-from app.schemas import CoreState, CoreStateOutput, DebateEntry, DebateOutput, JudgeOutput, RoundTrace, VerdictResult
+from app.schemas import CoreState, CoreStateOutput, DebateEntry, DebateOutput, JudgeOutput, PanelScore, RoundTrace, VerdictResult
 
 # ChatEval: agents with the same role prompt add nothing over a single agent; diversity is what helps,
 # with 3-4 roles as the sweet spot. Each judge scores the full rubric but scrutinises one angle.
@@ -117,8 +117,13 @@ def build_core_state(request, snapshot, provider, previous=None):
     return CoreState(**twice(structure).model_dump(), trajectory=snapshot.get("trajectory", []))
 
 
-def run_debate(request, snapshot, provider, appeals=None, parent_id=None, calls=0):
-    appeals = appeals or []
+def panel_scores(panel):
+    """Each judge's own six scores, so the averaged card can be traced back to who gave what."""
+    keys = ("logic", "emotionControl", "evidence")
+    return [PanelScore(persona=persona, belief=j.belief, plaintiff={k: getattr(j.plaintiff, k) for k in keys}, defendant={k: getattr(j.defendant, k) for k in keys}) for persona, j in panel.items()]
+
+
+def run_debate(request, snapshot, provider, calls=0):
     log, trace, previous = [], [], None
     max_rounds = max(1, min(3, int(os.getenv("VERDICT_MAX_ROUNDS", "3"))))
     score_limit = float(os.getenv("VERDICT_STABILITY_DELTA", "5"))
@@ -131,7 +136,7 @@ def run_debate(request, snapshot, provider, appeals=None, parent_id=None, calls=
     # Identical for every call of this verdict, so it forms the cacheable prompt prefix.
     # The judges score each person's own words, so those are listed per speaker next to the full log.
     said = {speaker: [m["text"] for m in snapshot["messages"] if m["speaker"] == speaker] for speaker in "AB"}
-    case = {"case": {"messages": snapshot["messages"], "utterances": said, "relationship": snapshot["relationship"], "context": request.context, "mode": request.mode, "conflictTemperature": snapshot["temperature"], "core_state": snapshot.get("core"), "appeals": appeals}}
+    case = {"case": {"messages": snapshot["messages"], "utterances": said, "relationship": snapshot["relationship"], "context": request.context, "mode": request.mode, "conflictTemperature": snapshot["temperature"], "core_state": snapshot.get("core")}}
     strategies = {role: None for role in ROLES}
     panel = {}
     for round_number in range(1, max_rounds + 1):
@@ -174,7 +179,7 @@ def run_debate(request, snapshot, provider, appeals=None, parent_id=None, calls=
             break
         previous = judgment
     usage_log.reset(usage_token)
-    return VerdictResult(**judgment.model_dump(), verdictId=str(uuid.uuid4()), mode=request.mode, debateLog=log, rounds=round_number, stopReason="stable" if stable else "max_rounds", parentVerdictId=parent_id, snapshotVersion=snapshot["version"], provider=f"{getattr(provider, 'vendor', 'openai')}/{provider.model}", promptVersion=PROMPT_VERSION, coreState=snapshot.get("core"), roundTrace=trace, modelCalls=calls, judges=len(personas), usage=usage_total(usage))
+    return VerdictResult(**judgment.model_dump(), verdictId=str(uuid.uuid4()), mode=request.mode, debateLog=log, rounds=round_number, stopReason="stable" if stable else "max_rounds", panelScores=panel_scores(panel), snapshotVersion=snapshot["version"], provider=f"{getattr(provider, 'vendor', 'openai')}/{provider.model}", promptVersion=PROMPT_VERSION, coreState=snapshot.get("core"), roundTrace=trace, modelCalls=calls, judges=len(personas), usage=usage_total(usage))
 
 
 def create_verdict(request, authorization, store, provider):
@@ -199,28 +204,5 @@ def create_verdict(request, authorization, store, provider):
     core = build_core_state(request, snapshot, provider, store.core(request.room_id))
     snapshot["core"] = core.model_dump()
     result = run_debate(request, snapshot, provider, calls=1)
-    store.save_verdict(request, snapshot, result, [], core=core.model_dump_json())
-    return result
-
-
-def appeal_verdict(verdict_id, request, authorization, store, provider):
-    from app.schemas import VerdictInput
-    parent = store.verdict(verdict_id)
-    subject = store.authorize(parent["room_id"], authorization)
-    existing = store.verdict_by_request(parent["room_id"], request.request_id)
-    if existing:
-        previous_appeals = json.loads(existing["appeals"])
-        if existing["parent_id"] != verdict_id or not previous_appeals or previous_appeals[-1] != {"speaker": subject, "text": request.text}:
-            raise HTTPException(409, "같은 요청 ID를 다른 반론에 사용할 수 없습니다.")
-        return VerdictResult.model_validate_json(existing["result"])
-    snapshot = json.loads(parent["snapshot"])
-    original = VerdictInput.model_validate(snapshot["request"])
-    original.request_id = request.request_id
-    appeals = json.loads(parent["appeals"])
-    if len(appeals) >= 3:
-        raise HTTPException(409, "반론은 같은 판결 흐름에서 최대 3회 가능합니다. 새 판결을 요청해주세요.")
-    appeals.append({"speaker": subject, "text": request.text})
-    # Same frozen snapshot and Core State; the appeal is added as a claim, not as a fact.
-    result = run_debate(original, snapshot, provider, appeals, verdict_id)
-    store.save_verdict(original, snapshot, result, appeals)
+    store.save_verdict(request, snapshot, result, core=core.model_dump_json())
     return result

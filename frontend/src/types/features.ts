@@ -95,6 +95,15 @@ export interface RoundTrace {
   ksDelta?: number | null;
 }
 
+export type ScoreKey = 'logic' | 'emotionControl' | 'evidence';
+
+export interface PanelScore {
+  persona: 'logic' | 'empathy' | 'evidence';
+  belief: number;
+  plaintiff: Record<ScoreKey, number>;
+  defendant: Record<ScoreKey, number>;
+}
+
 export interface VerdictResult {
   verdictId: string;
   mode: VerdictMode;
@@ -107,7 +116,7 @@ export interface VerdictResult {
   source: FeatureSource;
   rounds?: number;
   stopReason?: 'stable' | 'max_rounds';
-  parentVerdictId?: string | null;
+  panelScores?: PanelScore[]; // each judge's own scores in the last round; the cards show their mean
   snapshotVersion?: number;
   provider?: string;
   belief?: number;

@@ -18,11 +18,11 @@ from pydantic import ValidationError
 
 from app.provider import ModelOutputError, OpenAIProvider, configured, get_provider, get_generation_factory, llm_mode
 from app.prompts import MEDIATOR_PROMPT
-from app.schemas import MediationOutput, MediationResult, AppealInput, ConversationInput, DraftInput, DraftResult, EmotionInput, EmotionResult, MessageResult, ReactionInput, ReactionResult, ReceiptResult, RoomCreate, RoomJoin, RoomUpdate, SendInput, VerdictInput, VerdictResult
+from app.schemas import MediationOutput, MediationResult, ConversationInput, DraftInput, DraftResult, EmotionInput, EmotionResult, MessageResult, ReactionInput, ReactionResult, ReceiptResult, RoomCreate, RoomJoin, RoomUpdate, SendInput, VerdictInput, VerdictResult
 from app.scoring import RELATIONSHIP_OFFSET, conflict_score, rewrite_threshold, update_temperature
 from app.analysis import analysis_mode, analyzer_name, emotion_result, get_analyzer, light_analysis, reaction_result
 from app.store import get_store, room_lock
-from app.verdict import create_verdict, appeal_verdict as execute_appeal
+from app.verdict import create_verdict
 from app.prompts import PROMPT_VERSION
 
 app = FastAPI(title="KU래쪄용 갈등 중재 MVP", version="1.0.0")
@@ -239,14 +239,6 @@ def verdict(request: VerdictInput, provider: Provider, authorization: Authorizat
         return create_verdict(request, authorization, get_store(), provider)
 
 
-@app.post("/v1/verdicts/{verdict_id}/appeals", response_model=VerdictResult)
-def appeal(verdict_id: str, request: AppealInput, provider: Provider, authorization: Authorization = None):
-    store = get_store()
-    room_id = store.verdict(verdict_id)["room_id"]
-    with room_lock("verdict:" + room_id, wait=0):
-        return execute_appeal(verdict_id, request, authorization, store, provider)
-
-
 @app.get("/v1/rooms/{room_id}/verdicts")
 def verdict_history(room_id: str, authorization: Authorization = None):
     store = get_store()
@@ -260,4 +252,4 @@ def get_verdict(verdict_id: str, authorization: Authorization = None):
     record = store.verdict(verdict_id)
     store.authorize(record["room_id"], authorization)
     snapshot = json.loads(record["snapshot"])
-    return {"result": json.loads(record["result"]), "snapshot": snapshot["request"], "appeals": json.loads(record["appeals"])}
+    return {"result": json.loads(record["result"]), "snapshot": snapshot["request"]}

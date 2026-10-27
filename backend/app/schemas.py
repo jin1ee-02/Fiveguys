@@ -255,13 +255,22 @@ class MediationResult(StrictModel):
     provider: str
 
 
+class PanelScore(StrictModel):
+    """One judge's scores in the final round; the card shows their mean."""
+
+    persona: str
+    belief: float
+    plaintiff: dict[str, float]
+    defendant: dict[str, float]
+
+
 class VerdictResult(JudgeOutput):
     verdictId: str
     mode: Literal["WWE", "UFC"]
     debateLog: list[DebateEntry]
     rounds: int
     stopReason: Literal["stable", "max_rounds"]
-    parentVerdictId: str | None = None
+    panelScores: list[PanelScore] = Field(default_factory=list)
     snapshotVersion: int
     provider: str
     promptVersion: str
@@ -271,18 +280,6 @@ class VerdictResult(JudgeOutput):
     judges: int = 1
     # Token and latency totals of this verdict (AgenticSimLaw logs API metadata); None when the provider reports none.
     usage: dict[str, float] | None = None
-
-
-class AppealInput(StrictModel):
-    text: str = Field(min_length=1, max_length=2000)
-    request_id: str = Field(min_length=1, max_length=80)
-
-    @field_validator("text")
-    @classmethod
-    def reject_blank(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("공백만 입력할 수 없습니다.")
-        return value.strip()
 
 
 class RoomSettings(StrictModel):
