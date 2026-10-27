@@ -52,7 +52,7 @@ export function ChatProvider({ children }: PropsWithChildren) {
   const [draft, setDraft] = useState('');
   const [demoRevision, setDemoRevision] = useState(0);
   const [interactionCount, setInteractionCount] = useState(0);
-  const [settings, setSettings] = useState<RoomSettings>({ purifyEnabled: true, thermometerEnabled: true, reactionEnabled: true, sensitivity: 0.5 });
+  const [settings, setSettings] = useState<RoomSettings>({ purifyEnabled: true, thermometerEnabled: true, reactionEnabled: true });
   const [session, setSession] = useState<RoomSession | null>(null);
   const [sessions, setSessions] = useState<RoomSession[]>([]);
   const [ready, setReady] = useState(false);

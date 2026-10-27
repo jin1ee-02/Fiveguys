@@ -9,12 +9,9 @@ export interface RoomSettings {
   purifyEnabled: boolean;
   thermometerEnabled: boolean;
   reactionEnabled?: boolean;
-  sensitivity: number; // Temporary UI value: 0.25 / 0.5 / 0.75, pending team agreement.
 }
 
-export interface DraftPreviewRequest extends ConversationInput {
-  sensitivity: number;
-}
+export type DraftPreviewRequest = ConversationInput;
 
 export interface DraftReview {
   draft: string;

@@ -29,14 +29,14 @@ export default function ChatScreen() {
   const inputRef = useRef<TextInput>(null);
   const busy = interactionBusy || submitting;
   const draftInput = useMemo<DraftPreviewRequest | null>(() => settings.purifyEnabled && draft.trim() ? {
-    speaker, text: draft.trim(), relationship, previous_temperature: temperature, sensitivity: settings.sensitivity,
+    speaker, text: draft.trim(), relationship, previous_temperature: temperature, room_id: session?.roomId ?? null,
     recent_messages: messages.slice(-10).map(({ speaker, text }) => ({ speaker, text })),
-  } : null, [settings.purifyEnabled, settings.sensitivity, speaker, draft, relationship, temperature, messages]);
+  } : null, [settings.purifyEnabled, speaker, draft, relationship, temperature, messages, session?.roomId]);
   const { state: review, check } = useDraftReview(draftInput);
   const reactionInput = useMemo<ReactionRequest | null>(() => settings.reactionEnabled && draft.trim() ? {
     speaker, recipient: speaker === 'A' ? 'B' : 'A', text: draft.trim(), relationship, previous_temperature: temperature,
-    recent_messages: messages.slice(-10).map(({ speaker, text }) => ({ speaker, text })), draft_revision: newRequestId(),
-  } : null, [settings.reactionEnabled, draft, speaker, relationship, temperature, messages]);
+    recent_messages: messages.slice(-10).map(({ speaker, text }) => ({ speaker, text })), draft_revision: newRequestId(), room_id: session?.roomId ?? null,
+  } : null, [settings.reactionEnabled, draft, speaker, relationship, temperature, messages, session?.roomId]);
   const reaction = useReactionPreview(reactionInput);
 
   useEffect(() => {

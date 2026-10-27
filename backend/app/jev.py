@@ -93,7 +93,7 @@ class JevProvider:
         return analysis_cache.call([QUESTION_VERSION, self.model, state, questions], operation)
 
     def analyze(self, request: ConversationInput):
-        state = {"relationship": request.relationship, "summary": request.summary, "recent_messages": [t.model_dump() for t in request.recent_messages], "target": {"speaker": request.speaker, "text": request.text}}
+        state = {"relationship": request.relationship, "summary": request.summary, "core_state": request.core_state, "recent_messages": [t.model_dump() for t in request.recent_messages], "target": {"speaker": request.speaker, "text": request.text}}
         questions = {key: score_question(f"최근 대화는 문맥으로만 참고하고 target 한 메시지의 {key}를 평가하세요.", rubric) for key, rubric in RUBRICS.items()}
         questions["emotion"] = score_question("target 화자가 이 메시지에서 표현한 분노나 긴장 수준은? 실제 내면을 추측하지 마세요.", EMOTION_LEVELS)
         data = self.evaluate(state, questions)
@@ -126,7 +126,7 @@ class JevProvider:
             "emotion": {"type": "choice", "instructions": GUARD + "recipient가 sender의 미전송 target 문장을 받으면 어떤 감정을 느낄 가능성이 가장 높은가요? 실제 관측 결과가 아닌 예상입니다.", "criteria": EMOTIONS},
             "intensity": score_question("recipient가 target 초안을 받았을 때 전체 정서 반응 강도는? 감정 종류와 독립적으로 평가하세요.", INTENSITY_LEVELS),
         }
-        state = {"sender": request.speaker, "recipient": request.recipient, "target": request.text, "relationship": request.relationship, "recent_messages": [t.model_dump() for t in request.recent_messages]}
+        state = {"sender": request.speaker, "recipient": request.recipient, "target": request.text, "relationship": request.relationship, "core_state": request.core_state, "recent_messages": [t.model_dump() for t in request.recent_messages]}
         data = self.evaluate(state, questions)
         answer = data["answers"]["emotion"]
         if answer.get("type") != "choice" or answer.get("choice") not in EMOTIONS:

@@ -10,7 +10,7 @@ import threading
 from collections import OrderedDict
 
 import httpx
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from openai import APIConnectionError, OpenAIError, RateLimitError
@@ -21,6 +21,7 @@ from app.prompts import MEDIATOR_PROMPT
 from app.schemas import MediationOutput, MediationResult, ConversationInput, DraftInput, DraftResult, EmotionInput, EmotionResult, MessageResult, ReactionInput, ReactionResult, ReceiptResult, RoomCreate, RoomJoin, RoomUpdate, SendInput, VerdictInput, VerdictResult
 from app.scoring import RELATIONSHIP_OFFSET, conflict_score, rewrite_threshold, update_temperature
 from app.analysis import analysis_mode, analyzer_name, emotion_result, get_analyzer, light_analysis, reaction_result
+from app import core_state
 from app.store import get_store, room_lock
 from app.verdict import create_verdict
 from app.prompts import PROMPT_VERSION
@@ -112,9 +113,30 @@ def _provider_failure(error: Exception) -> HTTPException:
     return HTTPException(status_code=502, detail="AI 요청 또는 구조화 결과 검증에 실패했습니다. 모델 설정과 API 연결을 확인하세요.")
 
 
+def with_core(request, authorization):
+    """Attach the room's Core State (Light view) to a Light request. Only the server fills it: a request
+    without a room gets none, and a room request must come from that room's participant who is speaking."""
+    if not request.room_id:
+        return request.model_copy(update={"core_state": None})
+    store = get_store()
+    if store.authorize(request.room_id, authorization) != request.speaker:
+        raise HTTPException(403, "요청 화자와 참가 토큰이 일치하지 않습니다.")
+    return request.model_copy(update={"core_state": core_state.light_view(store.core(request.room_id))})
+
+
+def refresh_core(store, room_id, generation):
+    """Background step after a message is stored: update the Core State that the next Light and Heavy calls read."""
+    try:
+        provider = generation()
+    except HTTPException:
+        return  # no generation model configured; the verdict will report it when asked
+    core_state.refresh(store, room_id, provider)
+
+
 @app.post("/v1/messages/analyze", response_model=MessageResult)
 def analyze_message(request: ConversationInput, provider: Analyzer) -> MessageResult:
     """Analyze a sent message and return the updated temperature; caller persists it."""
+    request = request.model_copy(update={"core_state": None})
     try:
         features, _ = light_analysis(request, provider)
     except (OpenAIError, ModelOutputError, ValidationError) as error:
@@ -129,17 +151,18 @@ def analyze_message(request: ConversationInput, provider: Analyzer) -> MessageRe
 
 
 @app.post("/v1/drafts/analyze", response_model=DraftResult)
-def analyze_draft(request: DraftInput, provider: Analyzer, generation: GenerationFactory) -> DraftResult:
+def analyze_draft(request: DraftInput, provider: Analyzer, generation: GenerationFactory, authorization: Authorization = None) -> DraftResult:
     """Analyze an unsent draft without changing the conversation temperature."""
+    request = with_core(request, authorization)
     try:
         # Light path scores the draft; an OpenAI analyzer returns no alternatives here and they are written by the
         # dedicated call below once a suggestion is due (offline rules and tests may still hand them back directly).
         features, alternatives = light_analysis(request, provider)
         risk = conflict_score(features)
-        threshold = max(15, min(90, round(rewrite_threshold(request.previous_temperature) + relationship_offset(request.relationship) - (request.sensitivity - 0.5) * 40)))
+        threshold = rewrite_threshold(request.previous_temperature) + relationship_offset(request.relationship)
         # One unmistakable signal (3+ = clear sarcasm / direct attack / strong blame) is enough even in a calm room,
-        # otherwise the weighted sum can never reach the calm-room threshold. Low sensitivity opts out.
-        strong = max(features.hostility, features.sarcasm, features.blame) >= 3 and request.sensitivity >= 0.5
+        # otherwise the weighted sum can never reach the calm-room threshold.
+        strong = max(features.hostility, features.sarcasm, features.blame) >= 3
         decision = "low_confidence" if features.confidence <= 1 else "rewrite_suggested" if risk >= threshold or strong else "below_threshold"
         if decision != "rewrite_suggested" and not request.force_rewrite:
             alternatives = []
@@ -170,8 +193,8 @@ def analyze_emotion(request: EmotionInput, provider: Analyzer):
 
 
 @app.post("/v1/reactions/preview", response_model=ReactionResult)
-def preview_reaction(request: ReactionInput, provider: Analyzer):
-    return reaction_result(request, provider)
+def preview_reaction(request: ReactionInput, provider: Analyzer, authorization: Authorization = None):
+    return reaction_result(with_core(request, authorization), provider)
 
 
 @app.post("/v1/rooms")
@@ -199,7 +222,7 @@ def room_settings(room_id: str, request: RoomUpdate, authorization: Authorizatio
 
 
 @app.post("/v1/rooms/{room_id}/messages")
-def send_message(room_id: str, request: SendInput, provider: Analyzer, authorization: Authorization = None):
+def send_message(room_id: str, request: SendInput, provider: Analyzer, generation: GenerationFactory, background: BackgroundTasks, authorization: Authorization = None):
     store = get_store()
     subject = store.authorize(room_id, authorization)
     with room_lock(room_id):
@@ -209,11 +232,16 @@ def send_message(room_id: str, request: SendInput, provider: Analyzer, authoriza
                 raise HTTPException(409, "같은 요청 ID를 다른 메시지에 사용할 수 없습니다.")
             return store.state(room_id, subject)
         state = store.state(room_id, subject)
-        input = ConversationInput(speaker=subject, text=request.text, relationship=state["relationship"], previous_temperature=state["temperature"], recent_messages=[{"speaker": m["speaker"], "text": m["text"]} for m in state["messages"][-10:]])
+        input = ConversationInput(speaker=subject, text=request.text, relationship=state["relationship"], previous_temperature=state["temperature"], recent_messages=[{"speaker": m["speaker"], "text": m["text"]} for m in state["messages"][-10:]],
+                                  room_id=room_id, core_state=core_state.light_view(store.core(room_id)))
         features, _ = light_analysis(input, provider)
         raw = conflict_score(features)
         result = MessageResult(features=features, raw_conflict=raw, previous_temperature=state["temperature"], temperature=update_temperature(state["temperature"], raw))
-        return store.append(room_id, subject, request, result, state["version"])
+        updated = store.append(room_id, subject, request, result, state["version"])
+    # "ㅇㅇ" and the like change nothing worth restructuring; the next real message or the verdict catches up.
+    if features.model_version != "prefilter":
+        background.add_task(refresh_core, store, room_id, generation)
+    return updated
 
 
 @app.post("/v1/rooms/{room_id}/mediation", response_model=MediationResult)

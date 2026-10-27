@@ -56,8 +56,12 @@ class Store:
                     request_id TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(room_id, request_id)
                 );
             """)
-            if "core_state" not in [row["name"] for row in db.execute("PRAGMA table_info(rooms)")]:
+            columns = [row["name"] for row in db.execute("PRAGMA table_info(rooms)")]
+            if "core_state" not in columns:
                 db.execute("ALTER TABLE rooms ADD COLUMN core_state TEXT")
+            # Room version the stored Core State was built from; behind the room version means stale.
+            if "core_version" not in columns:
+                db.execute("ALTER TABLE rooms ADD COLUMN core_version INTEGER")
 
     @contextmanager
     def connect(self):
@@ -109,7 +113,9 @@ class Store:
             rows = db.execute("SELECT * FROM messages WHERE room_id=? ORDER BY sequence DESC LIMIT 200", (room_id,)).fetchall()
             settings = db.execute("SELECT settings FROM participants WHERE room_id=? AND speaker=?", (room_id, speaker)).fetchone()
             count = db.execute("SELECT COUNT(*) FROM participants WHERE room_id=?", (room_id,)).fetchone()[0]
-        messages, settings = [self.message(row) for row in reversed(rows)], json.loads(settings[0])
+        messages = [self.message(row) for row in reversed(rows)]
+        # Rooms saved before a setting was removed (e.g. sensitivity) keep only the settings that still exist.
+        settings = RoomSettings.model_validate({k: v for k, v in json.loads(settings[0]).items() if k in RoomSettings.model_fields}).model_dump()
         # Both thermometers come from the stored Light results, so reading the room costs no model call.
         emotions = {who: thermometer(messages, who) for who in "AB"}
         return {"roomId": room_id, "relationship": room["relationship"], "version": room["version"], "temperature": room["temperature"], "messages": messages, "settings": settings, "participantCount": count, "emotions": emotions}
@@ -149,14 +155,20 @@ class Store:
         return dict(row)
 
     def core(self, room_id):
-        with self.connect() as db:
-            row = db.execute("SELECT core_state FROM rooms WHERE id=?", (room_id,)).fetchone()
-        return json.loads(row[0]) if row and row[0] else None
+        return self.core_with_version(room_id)[0]
 
-    def save_verdict(self, request, snapshot, result, core=None):
+    def core_with_version(self, room_id):
         with self.connect() as db:
-            if core:
-                db.execute("UPDATE rooms SET core_state=? WHERE id=?", (core, request.room_id))
+            row = db.execute("SELECT core_state, core_version FROM rooms WHERE id=?", (room_id,)).fetchone()
+        return (json.loads(row[0]) if row and row[0] else None), (row[1] if row else None)
+
+    def save_core(self, room_id, core, version):
+        """Keep the newest Core State: a slower update for an older room version never overwrites a newer one."""
+        with self.connect() as db:
+            db.execute("UPDATE rooms SET core_state=?, core_version=? WHERE id=? AND (core_version IS NULL OR core_version<=?)", (core, version, room_id, version))
+
+    def save_verdict(self, request, snapshot, result):
+        with self.connect() as db:
             # appeals / parent_id columns stay for databases made before appeals were removed; new rows leave them empty.
             db.execute("INSERT INTO verdicts VALUES(?,?,?,?,?,?,?,?)", (result.verdictId, request.room_id, json.dumps(snapshot, ensure_ascii=False), result.model_dump_json(), "[]", None, request.request_id, now()))
 

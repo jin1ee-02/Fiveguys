@@ -76,7 +76,7 @@ class OpenAIProvider:
 
     def reaction(self, request):
         from app.jev import EMOTIONS
-        result = self.structured(REACTION_PROMPT, {"sender": request.speaker, "recipient": request.recipient, "target": request.text, "relationship": request.relationship, "recent_messages": [t.model_dump() for t in request.recent_messages]}, ReactionOutput, 500)
+        result = self.structured(REACTION_PROMPT, {"sender": request.speaker, "recipient": request.recipient, "target": request.text, "relationship": request.relationship, "core_state": request.core_state, "recent_messages": [t.model_dump() for t in request.recent_messages]}, ReactionOutput, 500)
         import math
         values = [result.intensity, result.confidence, *result.probabilities]
         if len(result.probabilities) != 8 or any(not math.isfinite(value) or value < 0 for value in values) or sum(result.probabilities) <= 0:
@@ -95,6 +95,7 @@ class OpenAIProvider:
             {
                 "relationship": request.relationship,
                 "summary": request.summary,
+                "core_state": request.core_state,
                 "recent_messages": [turn.model_dump() for turn in request.recent_messages],
                 "target": {"speaker": request.speaker, "text": request.text},
             },

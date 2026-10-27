@@ -6,7 +6,7 @@ process.env.EXPO_PUBLIC_FEATURE_MODE = 'mock';
 const { deliverMessage } = require('../.test-build/api/client');
 const { analyzeMyEmotion, reviewDraft, requestVerdict } = require('../.test-build/api/features');
 const { DEMO_DRAFT, mockDraftReview, mockEmotion } = require('../.test-build/mocks/features');
-const input = { speaker: 'A', text: DEMO_DRAFT, relationship: '룸메이트', recent_messages: [], previous_temperature: 0, sensitivity: 0.5 };
+const input = { speaker: 'A', text: DEMO_DRAFT, relationship: '룸메이트', recent_messages: [], previous_temperature: 0 };
 
 test('local + mock 기능은 서버 연결 없이 체험된다', async () => {
   const previousFetch = global.fetch;
@@ -42,11 +42,10 @@ test('나의 감정 변화는 나의 발화끼리 비교한다', () => {
   assert.equal(result.trend, 'down');
 });
 
-test('순화 확인은 일반 문장에 대안을 강제하지 않고 민감도를 반영한다', () => {
+test('순화 확인은 일반 문장에 대안을 강제하지 않는다', () => {
   assert.equal(mockDraftReview({ ...input, text: '오늘 같이 청소할래?' }).decision, 'safe');
   assert.deepEqual(mockDraftReview({ ...input, text: '오늘 같이 청소할래?' }).alternatives, []);
-  assert.equal(mockDraftReview({ ...input, text: '왜 또 그래?', sensitivity: 0.25 }).decision, 'safe');
-  assert.equal(mockDraftReview({ ...input, text: '왜 또 그래?', sensitivity: 0.75 }).decision, 'suggested');
+  assert.equal(mockDraftReview(input).decision, 'suggested');
 });
 
 test('초안 확인과 판결 요청을 취소하면 늦은 예시 결과를 반환하지 않는다', async () => {

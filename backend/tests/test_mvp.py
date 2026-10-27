@@ -11,7 +11,8 @@ from fastapi.testclient import TestClient
 from app.analysis import emotion_result, get_analyzer
 from app.jev import score_answer
 from app.main import app
-from app.provider import ModelOutputError
+from app.offline import OfflineProvider
+from app.provider import ModelOutputError, get_generation_factory
 from app.schemas import DebateOutput, EmotionInput, FeatureScores, JudgeOutput, SideScore, VerdictInput
 from app.store import Store
 from app.verdict import run_debate
@@ -49,6 +50,8 @@ class MvpTests(unittest.TestCase):
         self.store_patch = patch("app.main.get_store", return_value=self.store)
         self.store_patch.start()
         app.dependency_overrides[get_analyzer] = lambda: self.analyzer
+        # Sending a message refreshes the Core State in the background; never let a test reach a real model for it.
+        app.dependency_overrides[get_generation_factory] = lambda: OfflineProvider
         self.client = TestClient(app)
 
     def tearDown(self):

@@ -5,7 +5,6 @@ import { ActionButton, ui } from '../components/ui';
 import { useChat } from '../state/ChatContext';
 
 const relationships = ['친구', '연인', '직장 동료', '룸메이트', '기타'];
-const sensitivities = [{ label: '낮음', value: 0.25 }, { label: '보통', value: 0.5 }, { label: '높음', value: 0.75 }];
 
 export default function RoomSettingsScreen() {
   const { relationship, setRelationship, interactionBusy, settings, updateSettings } = useChat();
@@ -18,7 +17,6 @@ export default function RoomSettingsScreen() {
         <View style={[ui.row, { justifyContent: 'space-between' }]}><View style={{ flex: 1 }}><Text style={ui.label}>상대 반응 미리보기</Text><Text style={ui.subtitle}>보내기 전에 예상 반응을 살펴봐요.</Text></View><FeatureToggle title="상대 반응" enabled={!!settings.reactionEnabled} disabled={interactionBusy} onChange={(enabled) => updateSettings({ reactionEnabled: enabled })} /></View>
       </View>
       <Text style={ui.subtitle}>AI 모드에서는 대화 갈등 온도를 갱신하기 위해 전송 메시지를 분석합니다. 기능을 끄면 해당 기능의 추가 분석과 표시를 멈춥니다.</Text>
-      <View style={ui.card}><Text style={ui.label}>순화 민감도</Text><View style={ui.row}>{sensitivities.map(({ label, value }) => <ActionButton key={value} title={label} secondary={settings.sensitivity !== value} onPress={() => updateSettings({ sensitivity: value })} disabled={interactionBusy} style={{ flex: 1 }} />)}</View><Text style={ui.subtitle}>높음으로 설정하면 대안을 더 자주 제안합니다.</Text></View>
       <View style={ui.card}><Text style={ui.label}>어떤 사이인가요?</Text><Text style={ui.subtitle}>관계에 맞는 표현으로 대화를 이어가요.</Text><View style={[ui.row, { flexWrap: 'wrap' }]}>{relationships.map((value) => <ActionButton key={value} title={`${relationship === value ? '✓ ' : ''}${value}`} secondary={relationship !== value} disabled={interactionBusy} onPress={() => setRelationship(value)} />)}</View></View>
       <ActionButton title="채팅으로 돌아가기" secondary onPress={() => router.replace('/chat')} />
     </ScrollView>

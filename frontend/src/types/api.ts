@@ -13,6 +13,8 @@ export interface ConversationInput {
   relationship: string;
   summary?: string | null;
   previous_temperature: number;
+  // In a room the server attaches that room's Core State to the analysis (the request must carry the room token).
+  room_id?: string | null;
 }
 
 export interface FeatureScores {

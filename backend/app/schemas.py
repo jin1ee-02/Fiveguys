@@ -28,6 +28,9 @@ class ConversationInput(StrictModel):
     relationship: str | None = Field(default=None, max_length=100)
     summary: str | None = Field(default=None, max_length=1000)
     previous_temperature: float = Field(default=0, ge=0, le=100)
+    # A room request names its room; the server then fills core_state from the room (anything a client sends there is replaced).
+    room_id: str | None = Field(default=None, max_length=80)
+    core_state: dict | None = None
 
     @field_validator("speaker", "text")
     @classmethod
@@ -41,7 +44,6 @@ class DraftInput(ConversationInput):
     suggest_rewrite: bool = True
     # LLMediator-style manual activation: the user asks for alternatives even when nothing was flagged.
     force_rewrite: bool = False
-    sensitivity: float = Field(default=0.5, ge=0, le=1)
 
 
 class ReceiptResult(StrictModel):
@@ -286,7 +288,6 @@ class RoomSettings(StrictModel):
     purifyEnabled: bool = True
     thermometerEnabled: bool = True
     reactionEnabled: bool = True
-    sensitivity: float = Field(default=0.5, ge=0, le=1)
 
 
 class RoomCreate(StrictModel):

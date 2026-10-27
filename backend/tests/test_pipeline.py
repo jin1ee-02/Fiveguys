@@ -13,7 +13,7 @@ from app.offline import OfflineProvider
 from app.provider import get_generation_factory, get_provider
 from app.schemas import ConversationInput, DebateOutput, JudgeOutput, SideScore, VerdictInput
 from app.store import Store
-from app.verdict import aggregate, ks_distance, run_debate, validate_judge
+from app.verdict import Moderator, aggregate, ks_distance, run_debate, validate_judge
 
 SCENARIO = [("A", "오늘 청소 같이 하기로 했잖아."), ("B", "미안, 오늘 너무 바빠서 못 했어."), ("A", "지난번에도 그래서 좀 답답해."), ("B", "내일은 같이 할 수 있을 것 같아.")]
 
@@ -95,6 +95,31 @@ class PipelineTests(unittest.TestCase):
         self.assertLessEqual(partner["level"], 2)
         self.assertGreater(state["temperature"], 0)
 
+    def test_core_state_follows_each_message_and_reaches_light_requests(self):
+        self.chat(SCENARIO[:2])
+        core, version = self.store.core_with_version(self.room)
+        self.assertTrue(core["issues"] and core["position_a"])
+        self.assertEqual(version, self.store.state(self.room, "A")["version"])
+        seen = []
+        original = OfflineProvider.light
+        def spy(provider, request):
+            seen.append(request.core_state)
+            return original(provider, request)
+        with patch.object(OfflineProvider, "light", spy):
+            draft = {"speaker": "A", "text": "진짜 대단하시네 ㅋㅋ 맨날 그 모양이지", "relationship": "룸메이트", "previous_temperature": 30, "suggest_rewrite": False}
+            # In a room the server attaches the room's Core State, whatever the client put there.
+            self.client.post("/v1/drafts/analyze", json={**draft, "room_id": self.room, "core_state": {"issues": ["가짜"]}}, headers=self.headers("A"))
+            # Without a room there is no Core State.
+            self.client.post("/v1/drafts/analyze", json={**draft, "core_state": {"issues": ["가짜"]}})
+            # The next sent message is scored with the Core State too.
+            self.chat([("A", "지난번에도 그래서 좀 답답해.")])
+        self.assertEqual(seen[0]["issues"], core["issues"])
+        self.assertNotIn("facts", seen[0])
+        self.assertIsNone(seen[1])
+        self.assertIsNotNone(seen[2])
+        # Another participant's token cannot read this room's Core State through a draft.
+        self.assertEqual(self.client.post("/v1/drafts/analyze", json={**draft, "room_id": self.room}, headers=self.headers("B")).status_code, 403)
+
     def test_verdict_builds_core_state_debates_in_order_and_stops_when_stable(self):
         state = self.chat(SCENARIO)
         request = {"room_id": self.room, "requester": "A", "mode": "WWE", "relationship": "룸메이트", "context": "이번 주 청소는 B 차례였어요.", "request_id": "v1",
@@ -107,7 +132,8 @@ class PipelineTests(unittest.TestCase):
         # The first speaker alternates between rounds to offset the order bias of one-by-one debate.
         self.assertEqual([entry["role"] for entry in body["debateLog"][6:8]], ["defense", "prosecutor"])
         self.assertTrue(all(entry["strategy"] for entry in body["debateLog"] if entry["role"] != "judge"))
-        self.assertEqual((body["rounds"], body["stopReason"], body["modelCalls"], body["judges"]), (2, "stable", 13, 3))
+        # Every sent message already refreshed the Core State, so the verdict reuses it: 2 rounds x 6 calls, no rebuild.
+        self.assertEqual((body["rounds"], body["stopReason"], body["modelCalls"], body["judges"]), (2, "stable", 12, 3))
         self.assertEqual(sum(body["roundTrace"][0]["votes"].values()), 3)
         self.assertEqual(body["roundTrace"][1]["ksDelta"], 0)
         self.assertEqual(len(body["coreState"]["trajectory"]), 4)
@@ -137,6 +163,17 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual((provider.turns[0]["phase"], provider.turns[3]["phase"], provider.turns[6]["phase"]), ("opening", "rebuttal", "closing"))
         self.assertEqual((provider.turns[3]["role"], provider.turns[3]["own_previous_strategy"]), ("defense", "defense 전략"))
         self.assertNotIn("strategy", str(provider.turns[1]["transcript"]))
+
+    def test_each_agent_is_its_own_object_with_private_memory(self):
+        request = VerdictInput(room_id="r", requester="A", mode="UFC", relationship="친구", recent_messages=[{"speaker": "A", "text": "늦었네"}, {"speaker": "B", "text": "미안"}], request_id="r")
+        snapshot = {"messages": [m.model_dump() for m in request.recent_messages], "relationship": "친구", "temperature": 20, "version": 2}
+        moderator = Moderator(DriftingJudge([0.5, 0.5, 0.5, 0.5, 0.5, 0.5]), judges=2, max_rounds=2)
+        moderator.run(request, snapshot)
+        self.assertEqual(len({id(agent) for agent in [*moderator.debaters.values(), *moderator.judges]}), 5)
+        self.assertEqual({role: agent.strategy for role, agent in moderator.debaters.items()}, {role: f"{role} 전략" for role in ("prosecutor", "defense", "factcheck")})
+        self.assertTrue(all(agent.previous is not None for agent in moderator.judges))
+        # The shared board carries public text only.
+        self.assertNotIn("전략", str(moderator.board.transcript(2)))
 
     def test_one_invalid_reply_is_asked_again_instead_of_failing_the_verdict(self):
         request = VerdictInput(room_id="r", requester="A", mode="UFC", relationship="친구", recent_messages=[{"speaker": "A", "text": "늦었네"}, {"speaker": "B", "text": "미안"}], request_id="r")

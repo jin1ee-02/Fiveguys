@@ -15,7 +15,7 @@ export const DEMO_CONVERSATION: ChatTurn[] = [
 export const DEMO_DRAFT = '진짜 대단하시네 ㅋㅋ 맨날 그 모양이지';
 
 export function mockDraftReview(input: DraftPreviewRequest): DraftReview {
-  const suggested = sharp.test(input.text) || (input.sensitivity >= 0.75 && /왜\s*또|됐어.*말|넌\s*늘/.test(input.text));
+  const suggested = sharp.test(input.text);
   const alternatives = boundary.test(input.text)
     ? ['지금은 대화를 이어가기 어려워. 잠깐 쉬고 싶어.', '내 감정을 정리할 시간이 필요해. 잠시 멈춰줄래?', '지금 이 말은 불편하게 느껴져. 조금 차분하게 이야기하고 싶어.']
     : ['오늘은 좀 아쉬웠어. 다음에는 미리 말해주면 좋겠어.', '비슷한 일이 반복돼서 답답해. 이번에는 같이 해결해볼 수 있을까?', '내가 불편했던 부분을 설명하고 싶어. 내 입장도 들어줄래?'];
