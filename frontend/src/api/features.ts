@@ -59,7 +59,7 @@ function validateVerdict(result: Omit<VerdictResult, 'source'>): VerdictResult {
   if (typeof result.verdictId !== 'string' || !result.verdictId || !['WWE', 'UFC'].includes(result.mode) ||
       ![result.summary, result.recommendation, result.humor].every((text) => typeof text === 'string') ||
       scores.some((score) => !score || ![score.logic, score.emotionControl, score.evidence].every((value) => Number.isFinite(value) && value >= 0 && value <= 100) || typeof score.strength !== 'string' || typeof score.improvement !== 'string') ||
-      !Array.isArray(result.debateLog) || result.debateLog.some((entry) => !entry || !['prosecutor', 'defense', 'factcheck', 'judge'].includes(entry.role) || !Number.isInteger(entry.round) || entry.round < 1 || typeof entry.text !== 'string')) {
+      !Array.isArray(result.debateLog) || result.debateLog.some((entry) => !entry || !['prosecutor', 'defense', 'factcheck', 'judge'].includes(entry.role) || !Number.isInteger(entry.round) || entry.round < 0 || typeof entry.text !== 'string')) {
     throw new Error('판결 응답 형식을 확인해주세요.');
   }
   return { ...result, source: 'api' };

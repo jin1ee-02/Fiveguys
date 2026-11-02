@@ -19,7 +19,7 @@ from app import core_state
 from app.prompts import DEBATE_PROMPT, JUDGE_PROMPT, PROMPT_VERSION
 from app.provider import ModelOutputError
 from app.runtime import usage_log, usage_total
-from app.schemas import CoreState, DebateEntry, DebateOutput, JudgeOutput, PanelScore, RoundTrace, VerdictResult
+from app.schemas import CoreState, DebateEntry, DebateOutput, JudgeOutput, PanelPoint, PanelScore, RoundTrace, VerdictResult
 
 # ChatEval: agents with the same role prompt add nothing over a single agent; diversity is what helps,
 # with 3-4 roles as the sweet spot. Each judge scores the full rubric but scrutinises one angle.
@@ -29,6 +29,7 @@ JUDGE_PERSONAS = {
     "evidence": "근거 심사: 대화에서 확인되는 근거와 한쪽 주장만 있는 내용의 구별을 특히 꼼꼼히 봅니다.",
 }
 VOTES = ("B", "even", "A")  # ordered outcome scale of one judge
+ITEMS = ("logic", "emotionControl", "evidence")
 
 # Speaking order inside a round: claim -> rebuttal -> internal fact check, then the judge panel.
 ROLES = {
@@ -96,6 +97,63 @@ def validate_judge(judgment, mode):
     return judgment
 
 
+SHIFT_LIMIT = 15  # how far the debate may take one judge's item from its pre-debate score
+UNAPPLIED = " (점수 변화와 방향이 달라 반영하지 않음)"
+REPEATED = " (같은 방향으로 이미 반영해 다시 반영하지 않음)"
+
+
+def note(point, text):
+    point.reason = point.reason[:200 - len(text)] + text
+
+
+def check_points(judgment, previous, spoken, count, initial=None, applied=frozenset()):
+    """The debate is the only way a score moves after round 0, and code holds it to three rules.
+    An item keeps the judge's previous score (and reason) unless a point the judge accepted with message evidence
+    moves it that way; each judge moves an item in one direction once per verdict (`applied`), so a debater
+    repeating an accepted point cannot ratchet a score up round after round; and the debate moves an item at most
+    SHIFT_LIMIT from the judge's own pre-debate score (`initial`). gpt-4o-mini re-reads items without any point,
+    moves them against its own ruling, and accepts the same advocacy every round."""
+    if not spoken <= {p.role for p in judgment.debatePoints}:
+        raise ModelOutputError("심사위원이 토론자의 발언을 모두 검토하지 않았습니다.")
+    moves = {}
+    for p in judgment.debatePoints:
+        if not p.claim.strip() or len(p.claim) > 200 or not p.reason.strip() or len(p.reason) > 200 or not valid_indices(p.evidence_indices, count):
+            raise ModelOutputError("토론 논점 검토가 유효하지 않습니다.")
+        if p.accepted and not p.evidence_indices:
+            raise ModelOutputError("메시지 근거가 없는 논점은 채택할 수 없습니다.")
+        if p.accepted and p.direction != "none":
+            moves.setdefault((p.side, p.item), []).append(p)
+    if previous is None:
+        return judgment
+    for side, name in (("A", "plaintiff"), ("B", "defendant")):
+        now, before = getattr(judgment, name), getattr(previous, name)
+        for item in ITEMS:
+            points = moves.get((side, item), [])
+            for p in points:
+                if (side, item, p.direction) in applied:
+                    note(p, REPEATED)
+            fresh = {p.direction for p in points if (side, item, p.direction) not in applied}
+            change = getattr(now, item) - getattr(before, item)
+            if change == 0 or change > 0 and "up" in fresh or change < 0 and "down" in fresh:
+                if initial is not None:
+                    start = getattr(getattr(initial, name), item)
+                    setattr(now, item, max(start - SHIFT_LIMIT, min(start + SHIFT_LIMIT, getattr(now, item))))
+                continue
+            setattr(now, item, getattr(before, item))
+            setattr(now, item + "Reason", getattr(before, item + "Reason"))
+            for p in points:
+                if (side, item, p.direction) not in applied:
+                    note(p, UNAPPLIED)
+    return judgment
+
+
+def moved(judgment, previous):
+    """(side, item, direction) of every item this judgment moved from the previous one."""
+    return {(side, item, "up" if getattr(getattr(judgment, name), item) > getattr(getattr(previous, name), item) else "down")
+            for side, name in (("A", "plaintiff"), ("B", "defendant")) for item in ITEMS
+            if getattr(getattr(judgment, name), item) != getattr(getattr(previous, name), item)}
+
+
 def twice(operation):
     """A reply that breaks a length or index rule is asked for once more, so one of ~19 calls cannot sink the verdict."""
     try:
@@ -142,8 +200,8 @@ class DebaterAgent:
         self.role, self.instruction, self.provider = role, ROLES[role], provider
         self.strategy = None  # private memory: only this agent ever sees it again
 
-    def speak(self, case, board, round_number, phase, count):
-        turn = {"role": self.role, "round": round_number, "phase": phase, "instruction": self.instruction, "transcript": board.transcript(round_number), "own_previous_strategy": self.strategy}
+    def speak(self, case, board, round_number, phase, count, feedback=None):
+        turn = {"role": self.role, "round": round_number, "phase": phase, "instruction": self.instruction, "transcript": board.transcript(round_number), "own_previous_strategy": self.strategy, "panel_feedback": feedback or []}
 
         def call():
             result = self.provider.structured(DEBATE_PROMPT, turn, DebateOutput, 1100, shared=case)
@@ -156,16 +214,39 @@ class DebaterAgent:
 
 
 class JudgeAgent:
-    """One panel judge. Sees the public debate and its own previous judgment, never the other judges."""
+    """One panel judge. Sees the public debate and its own previous judgment, never the other judges.
+    Round 0 scores the utterances alone; later rounds rule on each debater's points and adjust from there."""
 
     def __init__(self, persona, provider):
         self.persona, self.instruction, self.provider = persona, JUDGE_PERSONAS[persona], provider
         self.previous = None  # private memory
+        self.initial = None  # round-0 judgment, the anchor the debate may move away from
+        self.applied = set()  # (side, item, direction) moves already made in this verdict
+        self.last_moves = set()  # moves made in the latest round
 
-    def judge(self, case, board, round_number, mode):
-        turn = {"round": round_number, "persona": self.instruction, "opinions": board.opinions(round_number), "previous_judgment": self.previous.model_dump() if self.previous else None}
-        self.previous = twice(lambda: validate_judge(self.provider.structured(JUDGE_PROMPT, turn, JudgeOutput, 2000, shared=case), mode))
-        return self.previous
+    def judge(self, case, board, round_number, mode, count):
+        opinions = board.opinions(round_number)
+        spoken = {o["role"] for o in opinions}
+        turn = {"round": round_number, "persona": self.instruction, "opinions": opinions, "previous_judgment": self.previous.model_dump(exclude={"debatePoints"}) if self.previous else None}
+        def call():
+            judgment = self.provider.structured(JUDGE_PROMPT, turn, JudgeOutput, 3000, shared=case)
+            # Points first: the lean is then turned to match the scores as they stand after reverts and limits.
+            return validate_judge(check_points(judgment, self.previous, spoken, count, self.initial, self.applied), mode)
+        judgment = twice(call)
+        if self.previous is None:
+            self.initial = judgment.model_copy(deep=True)
+        else:
+            self.last_moves = moved(judgment, self.previous)
+            self.applied |= self.last_moves
+        self.previous = judgment
+        return judgment
+
+    def feedback(self):
+        """What the debaters may learn from this judge: its current scores and how it ruled on the last points."""
+        j = self.previous
+        scores = {side: {k: getattr(getattr(j, name), k) for k in ITEMS} for side, name in (("A", "plaintiff"), ("B", "defendant"))}
+        return {"judge": self.instruction.split(":")[0], "scores": scores, "belief": j.belief,
+                "rulings": [{"role": p.role, "claim": p.claim, "accepted": p.accepted, "reason": p.reason} for p in j.debatePoints]}
 
 
 class Moderator:
@@ -199,33 +280,47 @@ class Moderator:
         # The judges score each person's own words, so those are listed per speaker next to the full log.
         said = {speaker: [m["text"] for m in snapshot["messages"] if m["speaker"] == speaker] for speaker in "AB"}
         case = {"case": {"messages": snapshot["messages"], "utterances": said, "relationship": snapshot["relationship"], "context": request.context, "mode": request.mode, "conflictTemperature": snapshot["temperature"], "core_state": snapshot.get("core")}}
-        trace, previous, panel = [], None, {}
+        trace, panel = [], {}
         try:
+            # Round 0: the panel scores the utterances before anyone argues, so every later change can be traced to the debate.
+            previous = self.panel_round(case, 0, request.mode, count, trace, None)
+            initial = {side: {k: getattr(getattr(previous, name), k) for k in ITEMS} for side, name in (("A", "plaintiff"), ("B", "defendant"))}
+            calls += len(self.judges)
             for round_number in range(1, self.max_rounds + 1):
+                # Debaters argue against the panel's current scores and its rulings on their last points.
+                feedback = [agent.feedback() for agent in self.judges]
                 for role in self.order(round_number):
-                    self.board.post(self.debaters[role].speak(case, self.board, round_number, self.phase(round_number), count))
-                with ThreadPoolExecutor(max_workers=len(self.judges)) as pool:
-                    judgments = list(pool.map(lambda agent: contextvars.copy_context().run(agent.judge, case, self.board, round_number, request.mode), self.judges))
-                panel = {agent.persona: j for agent, j in zip(self.judges, judgments)}
-                for persona, j in panel.items():
-                    self.board.post(DebateEntry(role="judge", round=round_number, text=j.summary, belief=j.belief, persona=persona))
-                judgment = aggregate(judgments)
+                    self.board.post(self.debaters[role].speak(case, self.board, round_number, self.phase(round_number), count, feedback))
+                judgment = self.panel_round(case, round_number, request.mode, count, trace, previous)
+                panel = {agent.persona: agent.previous for agent in self.judges}
                 calls += len(self.debaters) + len(self.judges)
                 # Adaptive stopping (Adaptive Stability Detection): stop when the distribution of judgments stopped moving.
-                votes = {key: sum(vote(j.belief) == key for j in judgments) for key in VOTES}
-                score_delta = max(abs(a - b) for a, b in zip(score_vector(previous), score_vector(judgment))) if previous else None
-                belief_delta = abs(previous.belief - judgment.belief) if previous else None
-                ks_delta = ks_distance(trace[-1].votes, votes) if previous else None
-                trace.append(RoundTrace(round=round_number, belief=judgment.belief, scoreDelta=score_delta, beliefDelta=belief_delta, unresolved=judgment.unresolved, beliefs=[j.belief for j in judgments], votes=votes, ksDelta=ks_delta))
-                stable = previous is not None and not judgment.unresolved and not previous.unresolved and score_delta <= score_limit and belief_delta <= belief_limit and ks_delta <= ks_limit
+                last = trace[-1]
+                stable = not judgment.unresolved and not previous.unresolved and last.scoreDelta <= score_limit and last.beliefDelta <= belief_limit and last.ksDelta <= ks_limit
                 if stable:
                     break
                 previous = judgment
         finally:
             usage_log.reset(usage_token)
-        keys = ("logic", "emotionControl", "evidence")
-        panel_scores = [PanelScore(persona=persona, belief=j.belief, plaintiff={k: getattr(j.plaintiff, k) for k in keys}, defendant={k: getattr(j.defendant, k) for k in keys}) for persona, j in panel.items()]
-        return VerdictResult(**judgment.model_dump(), verdictId=str(uuid.uuid4()), mode=request.mode, debateLog=self.board.log, rounds=round_number, stopReason="stable" if stable else "max_rounds", panelScores=panel_scores, snapshotVersion=snapshot["version"], provider=f"{getattr(self.provider, 'vendor', 'openai')}/{self.provider.model}", promptVersion=PROMPT_VERSION, coreState=snapshot.get("core"), roundTrace=trace, modelCalls=calls, judges=len(self.judges), usage=usage_total(usage))
+        panel_scores = [PanelScore(persona=persona, belief=j.belief, plaintiff={k: getattr(j.plaintiff, k) for k in ITEMS}, defendant={k: getattr(j.defendant, k) for k in ITEMS}) for persona, j in panel.items()]
+        return VerdictResult(**judgment.model_dump(), initialScores=initial, verdictId=str(uuid.uuid4()), mode=request.mode, debateLog=self.board.log, rounds=round_number, stopReason="stable" if stable else "max_rounds", panelScores=panel_scores, snapshotVersion=snapshot["version"], provider=f"{getattr(self.provider, 'vendor', 'openai')}/{self.provider.model}", promptVersion=PROMPT_VERSION, coreState=snapshot.get("core"), roundTrace=trace, modelCalls=calls, judges=len(self.judges), usage=usage_total(usage))
+
+    def panel_round(self, case, round_number, mode, count, trace, previous):
+        """All judges score this round in parallel; the round is logged and its panel mean returned."""
+        with ThreadPoolExecutor(max_workers=len(self.judges)) as pool:
+            judgments = list(pool.map(lambda agent: contextvars.copy_context().run(agent.judge, case, self.board, round_number, mode, count), self.judges))
+        for agent, j in zip(self.judges, judgments):
+            self.board.post(DebateEntry(role="judge", round=round_number, text=j.summary, belief=j.belief, persona=agent.persona))
+        judgment = aggregate(judgments)
+        votes = {key: sum(vote(j.belief) == key for j in judgments) for key in VOTES}
+        points = [PanelPoint(**p.model_dump(), persona=agent.persona, applied=p.accepted and (p.side, p.item, p.direction) in agent.last_moves and not p.reason.endswith((UNAPPLIED, REPEATED)))
+                  for agent, j in zip(self.judges, judgments) for p in j.debatePoints]
+        trace.append(RoundTrace(
+            round=round_number, belief=judgment.belief, unresolved=judgment.unresolved, beliefs=[j.belief for j in judgments], votes=votes, points=points,
+            scoreDelta=max(abs(a - b) for a, b in zip(score_vector(previous), score_vector(judgment))) if previous else None,
+            beliefDelta=abs(previous.belief - judgment.belief) if previous else None,
+            ksDelta=ks_distance(trace[-1].votes, votes) if previous else None))
+        return judgment
 
 
 def run_debate(request, snapshot, provider, calls=0):

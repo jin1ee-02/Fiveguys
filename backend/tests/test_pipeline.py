@@ -11,11 +11,17 @@ from app.analysis import get_analyzer, light_analysis
 from app.main import app
 from app.offline import OfflineProvider
 from app.provider import get_generation_factory, get_provider
-from app.schemas import ConversationInput, DebateOutput, JudgeOutput, SideScore, VerdictInput
+from app.schemas import ConversationInput, DebateOutput, DebatePoint, JudgeOutput, SideScore, VerdictInput
 from app.store import Store
-from app.verdict import Moderator, aggregate, ks_distance, run_debate, validate_judge
+from app.provider import ModelOutputError
+from app.verdict import Moderator, aggregate, check_points, ks_distance, run_debate, validate_judge
 
 SCENARIO = [("A", "오늘 청소 같이 하기로 했잖아."), ("B", "미안, 오늘 너무 바빠서 못 했어."), ("A", "지난번에도 그래서 좀 답답해."), ("B", "내일은 같이 할 수 있을 것 같아.")]
+
+
+def rulings(payload):
+    """A judge's look at every point of this round, none accepted, so no score has to move."""
+    return [DebatePoint(role=o["role"], claim=o["text"], side="A", item="logic", evidence_indices=[], accepted=False, direction="none", reason="근거 메시지 없음") for o in payload.get("opinions", [])]
 
 
 class DriftingJudge:
@@ -31,7 +37,7 @@ class DriftingJudge:
             self.turns.append(payload)
             return DebateOutput(strategy=f"{payload['role']} 전략", text=f"{payload['role']} 발언", evidence_indices=[])
         score = SideScore(logic=60, emotionControl=60, evidence=60, logicReason="논리 근거", emotionControlReason="감정 근거", evidenceReason="근거 설명", strength="강점", improvement="개선점")
-        return JudgeOutput(plaintiff=score, defendant=score, summary="요약", recommendation="제안", humor="", unresolved=False, belief=next(self.beliefs))
+        return JudgeOutput(debatePoints=rulings(payload), plaintiff=score, defendant=score, summary="요약", recommendation="제안", humor="", unresolved=False, belief=next(self.beliefs))
 
 
 class PipelineTests(unittest.TestCase):
@@ -127,15 +133,22 @@ class PipelineTests(unittest.TestCase):
         response = self.client.post("/v1/verdicts", json=request, headers=self.headers("A"))
         self.assertEqual(response.status_code, 200, response.text)
         body = response.json()
-        self.assertEqual([entry["role"] for entry in body["debateLog"][:6]], ["prosecutor", "defense", "factcheck", "judge", "judge", "judge"])
-        self.assertEqual([entry["persona"] for entry in body["debateLog"][3:6]], ["logic", "empathy", "evidence"])
+        # Round 0: the panel scores the utterances before the debate; then the debaters speak and the panel rules again.
+        self.assertEqual([(entry["role"], entry["round"]) for entry in body["debateLog"][:6]], [("judge", 0)] * 3 + [("prosecutor", 1), ("defense", 1), ("factcheck", 1)])
+        self.assertEqual([entry["persona"] for entry in body["debateLog"][6:9]], ["logic", "empathy", "evidence"])
         # The first speaker alternates between rounds to offset the order bias of one-by-one debate.
-        self.assertEqual([entry["role"] for entry in body["debateLog"][6:8]], ["defense", "prosecutor"])
+        self.assertEqual(Moderator(OfflineProvider()).order(2)[:2], ["defense", "prosecutor"])
         self.assertTrue(all(entry["strategy"] for entry in body["debateLog"] if entry["role"] != "judge"))
-        # Every sent message already refreshed the Core State, so the verdict reuses it: 2 rounds x 6 calls, no rebuild.
-        self.assertEqual((body["rounds"], body["stopReason"], body["modelCalls"], body["judges"]), (2, "stable", 12, 3))
+        # Every sent message already refreshed the Core State, so the verdict reuses it. The rules move no score,
+        # so the panel is stable after one debate round: 3 initial judgments + 3 debaters + 3 judgments, no rebuild.
+        self.assertEqual((body["rounds"], body["stopReason"], body["modelCalls"], body["judges"]), (1, "stable", 9, 3))
+        self.assertEqual([t["round"] for t in body["roundTrace"]], [0, 1])
         self.assertEqual(sum(body["roundTrace"][0]["votes"].values()), 3)
         self.assertEqual(body["roundTrace"][1]["ksDelta"], 0)
+        # Each judge ruled on every debater of round 1; nothing was argued in round 0.
+        self.assertEqual(body["roundTrace"][0]["points"], [])
+        self.assertEqual(sorted((p["persona"], p["role"]) for p in body["roundTrace"][1]["points"]), sorted((j, r) for j in ("logic", "empathy", "evidence") for r in ("prosecutor", "defense", "factcheck")))
+        self.assertEqual(body["initialScores"]["A"]["logic"], body["plaintiff"]["logic"])
         self.assertEqual(len(body["coreState"]["trajectory"]), 4)
         self.assertTrue(body["coreState"]["issues"] and body["coreState"]["position_a"])
         self.assertTrue(body["humor"])
@@ -153,11 +166,14 @@ class PipelineTests(unittest.TestCase):
     def test_debate_continues_while_judge_belief_moves_and_agents_rebut(self):
         request = VerdictInput(room_id="r", requester="A", mode="UFC", relationship="친구", recent_messages=[{"speaker": "A", "text": "늦었네"}, {"speaker": "B", "text": "미안"}], request_id="r")
         snapshot = {"messages": [m.model_dump() for m in request.recent_messages], "relationship": "친구", "temperature": 20, "version": 2}
-        provider = DriftingJudge([0.5, 0.8, 0.78])
+        provider = DriftingJudge([0.5, 0.8, 0.6, 0.58])
         with patch.dict("os.environ", {"VERDICT_JUDGES": "1"}):
             result = run_debate(request, snapshot, provider)
         self.assertEqual((result.rounds, result.stopReason), (3, "stable"))
-        self.assertEqual([round(t.beliefDelta, 2) if t.beliefDelta is not None else None for t in result.roundTrace], [None, 0.3, 0.02])
+        self.assertEqual([round(t.beliefDelta, 2) if t.beliefDelta is not None else None for t in result.roundTrace], [None, 0.3, 0.2, 0.02])
+        # Debaters argue against the panel's current view: round 1 sees the pre-debate scores, round 2 the rulings on round 1.
+        self.assertEqual((provider.turns[0]["panel_feedback"][0]["belief"], provider.turns[0]["panel_feedback"][0]["rulings"]), (0.5, []))
+        self.assertEqual({r["role"] for r in provider.turns[3]["panel_feedback"][0]["rulings"]}, {"prosecutor", "defense", "factcheck"})
         # The defense speaks after the prosecutor and sees that utterance; strategies stay private.
         self.assertEqual(provider.turns[1]["transcript"], [{"role": "prosecutor", "round": 1, "text": "prosecutor 발언"}])
         self.assertEqual((provider.turns[0]["phase"], provider.turns[3]["phase"], provider.turns[6]["phase"]), ("opening", "rebuttal", "closing"))
@@ -187,12 +203,12 @@ class PipelineTests(unittest.TestCase):
             return answer(prompt, payload, schema, tokens, shared)
         provider.structured = flaky
         result = run_debate(request, snapshot, provider)
-        self.assertEqual((result.rounds, result.stopReason), (2, "stable"))
+        self.assertEqual((result.rounds, result.stopReason), (1, "stable"))
 
     def test_panel_scores_are_averaged_and_vote_shift_is_measured_with_ks(self):
         def judgment(belief, logic):
             side = SideScore(logic=logic, emotionControl=50, evidence=50, logicReason=f"논리 {logic}", emotionControlReason="감정 근거", evidenceReason="근거 설명", strength="강점", improvement="개선점")
-            return JudgeOutput(plaintiff=side, defendant=side, summary=f"요약 {belief}", recommendation="제안", humor="", unresolved=belief > 0.7, belief=belief)
+            return JudgeOutput(debatePoints=[], plaintiff=side, defendant=side, summary=f"요약 {belief}", recommendation="제안", humor="", unresolved=belief > 0.7, belief=belief)
         merged = aggregate([judgment(0.3, 40), judgment(0.6, 70), judgment(0.9, 100)])
         self.assertEqual((merged.plaintiff.logic, merged.belief, merged.unresolved), (70.0, 0.6, False))
         self.assertEqual(merged.summary, "요약 0.6")  # text of the judge closest to the panel mean
@@ -204,10 +220,57 @@ class PipelineTests(unittest.TestCase):
     def test_judge_lean_is_turned_to_match_its_own_scores(self):
         def judgment(a, b, belief):
             side = lambda value: SideScore(logic=value, emotionControl=value, evidence=value, logicReason="논리 근거", emotionControlReason="감정 근거", evidenceReason="근거 설명", strength="강점", improvement="개선점")
-            return JudgeOutput(plaintiff=side(a), defendant=side(b), summary="요약", recommendation="제안", humor="", unresolved=False, belief=belief)
+            return JudgeOutput(debatePoints=[], plaintiff=side(a), defendant=side(b), summary="요약", recommendation="제안", humor="", unresolved=False, belief=belief)
         self.assertEqual(validate_judge(judgment(20, 80, 0.7), "UFC").belief, 0.2)  # B scored higher, yet the lean said A
         self.assertEqual(validate_judge(judgment(80, 20, 0.7), "UFC").belief, 0.7)  # consistent: kept as reported
         self.assertEqual(validate_judge(judgment(60, 60, 0.7), "UFC").belief, 0.7)  # no clear score gap: kept
+
+    def test_accepted_debate_point_moves_the_score_it_names(self):
+        request = VerdictInput(room_id="r", requester="A", mode="UFC", relationship="친구", recent_messages=[{"speaker": "A", "text": "맨날 늦네"}, {"speaker": "B", "text": "오늘 처음 늦은 거야"}], request_id="r")
+        snapshot = {"messages": [m.model_dump() for m in request.recent_messages], "relationship": "친구", "temperature": 20, "version": 2}
+
+        class PersuadedJudge(DriftingJudge):
+            """Before the debate B's evidence is 30; the defense points to message 1, the judge accepts it and raises it."""
+            def structured(self, prompt, payload, schema, tokens, shared=None):
+                if schema is DebateOutput:
+                    return DebateOutput(strategy="전략", text=f"{payload['role']} 발언", evidence_indices=[1] if payload["role"] == "defense" else [])
+                points = [DebatePoint(role=o["role"], claim=o["text"], side="B", item="evidence", evidence_indices=o["evidence_indices"],
+                                      accepted=o["role"] == "defense", direction="up" if o["role"] == "defense" else "none", reason="이유") for o in payload["opinions"]]
+                side = lambda evidence: SideScore(logic=50, emotionControl=50, evidence=evidence, logicReason="논리", emotionControlReason="감정", evidenceReason="근거", strength="강점", improvement="개선")
+                return JudgeOutput(debatePoints=points, plaintiff=side(50), defendant=side(60 if payload["opinions"] else 30), summary="요약", recommendation="제안", humor="", unresolved=False, belief=0.5)
+
+        with patch.dict("os.environ", {"VERDICT_JUDGES": "1"}):
+            result = run_debate(request, snapshot, PersuadedJudge([]))
+        # The judge wrote 60; the debate may take an item at most 15 from the pre-debate score.
+        self.assertEqual((result.initialScores["B"]["evidence"], result.defendant.evidence), (30, 45))
+        accepted = [p for t in result.roundTrace for p in t.points if p.accepted]
+        self.assertEqual((accepted[0].role, accepted[0].side, accepted[0].item, accepted[0].direction, accepted[0].applied), ("defense", "B", "evidence", "up", True))
+        # Repeated in round 2, the same point is accepted again but no longer moves anything.
+        self.assertTrue(len(accepted) > 1 and not accepted[1].applied)
+
+    def test_debate_points_must_be_grounded_and_agree_with_the_score_change(self):
+        side = lambda evidence: SideScore(logic=50, emotionControl=50, evidence=evidence, logicReason="논리", emotionControlReason="감정", evidenceReason="근거", strength="강점", improvement="개선")
+        point = lambda **kw: DebatePoint(**{"role": "defense", "claim": "주장", "side": "B", "item": "evidence", "evidence_indices": [1], "accepted": True, "direction": "up", "reason": "이유", **kw})
+        judged = lambda points, evidence: JudgeOutput(debatePoints=points, plaintiff=side(50), defendant=side(evidence), summary="요약", recommendation="제안", humor="", unresolved=False, belief=0.5)
+        before = judged([], 40)
+        self.assertEqual(check_points(judged([point()], 55), before, {"defense"}, 2).defendant.evidence, 55)
+        # A score that moves against the accepted point, or without any accepted point, keeps the previous score and reason.
+        against = check_points(judged([point()], 30), before, {"defense"}, 2)
+        self.assertEqual(against.defendant.evidence, 40)
+        self.assertTrue(against.debatePoints[0].reason.endswith("반영하지 않음)"))
+        self.assertEqual(check_points(judged([point(accepted=False, direction="none")], 55), before, {"defense"}, 2).defendant.evidence, 40)
+        # The same move a second time is not applied again, and the debate takes an item at most 15 from round 0.
+        repeated = check_points(judged([point()], 55), before, {"defense"}, 2, initial=before, applied={("B", "evidence", "up")})
+        self.assertEqual(repeated.defendant.evidence, 40)
+        self.assertIn("이미 반영", repeated.debatePoints[0].reason)
+        self.assertEqual(check_points(judged([point()], 90), before, {"defense"}, 2, initial=before).defendant.evidence, 55)
+        for points, evidence, roles in [
+            ([point(evidence_indices=[])], 55, {"defense"}),  # accepted with no message behind it
+            ([point(evidence_indices=[5])], 55, {"defense"}),  # message number out of range
+            ([point()], 55, {"defense", "factcheck"}),         # a debater nobody ruled on
+        ]:
+            with self.assertRaises(ModelOutputError):
+                check_points(judged(points, evidence), before, roles, 2)
 
     def test_manual_rewrite_request_returns_alternatives_for_an_unflagged_draft(self):
         draft = {"speaker": "A", "text": "오늘 같이 청소할래?", "previous_temperature": 0}

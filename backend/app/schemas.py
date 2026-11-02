@@ -190,7 +190,27 @@ class DebateOutput(StrictModel):
     evidence_indices: list[int]
 
 
+class DebatePoint(StrictModel):
+    """A judge's ruling on one debater's point. Only accepted points backed by messages may move a score."""
+
+    role: Literal["prosecutor", "defense", "factcheck"]
+    claim: str
+    side: Speaker  # whose score the point bears on
+    item: Literal["logic", "emotionControl", "evidence"]
+    evidence_indices: list[int]
+    accepted: bool
+    direction: Literal["up", "down", "none"]
+    reason: str
+
+
+class PanelPoint(DebatePoint):
+    persona: str
+    applied: bool = False  # this judge's score for side/item actually moved that way in this round
+
+
 class JudgeOutput(StrictModel):
+    # Ruled on before the scores, so the scores follow the accepted points.
+    debatePoints: list[DebatePoint]
     plaintiff: SideScore  # always A, regardless of requester
     defendant: SideScore  # always B
     summary: str
@@ -246,6 +266,7 @@ class RoundTrace(StrictModel):
     beliefs: list[float] = Field(default_factory=list)  # one per judge
     votes: dict[str, int] = Field(default_factory=dict)  # A / even / B
     ksDelta: float | None = None  # KS distance between this and the previous round's vote distribution
+    points: list[PanelPoint] = Field(default_factory=list)  # every judge's rulings on this round's debate
 
 
 class MediationOutput(StrictModel):
@@ -267,6 +288,9 @@ class PanelScore(StrictModel):
 
 
 class VerdictResult(JudgeOutput):
+    debatePoints: list[DebatePoint] = Field(default_factory=list)  # verdicts stored before v8 have none
+    # Panel mean before any debate (round 0), so the card can show what the debate changed.
+    initialScores: dict[str, dict[str, float]] | None = None
     verdictId: str
     mode: Literal["WWE", "UFC"]
     debateLog: list[DebateEntry]

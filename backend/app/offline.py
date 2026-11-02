@@ -7,7 +7,7 @@ The output is NOT an AI judgment. Every result is labelled `offline/rules-v1` an
 
 import re
 
-from app.schemas import CoreStateOutput, DebateOutput, FactItem, FeatureScores, JudgeOutput, LightOutput, MediationOutput, SideScore
+from app.schemas import CoreStateOutput, DebateOutput, DebatePoint, FactItem, FeatureScores, JudgeOutput, LightOutput, MediationOutput, SideScore
 
 LABEL = "offline/rules-v1"
 INSULT = re.compile(r"닥쳐|꺼져|병신|멍청|바보|미친|죽을래|재수\s*없|한심")
@@ -139,7 +139,12 @@ class OfflineProvider:
             angle = next((key for word, key in [("논리", "logic"), ("공감", "emotionControl"), ("근거", "evidence")] if word in payload.get("persona", "")), None)
             gap = (getattr(a, angle) - getattr(b, angle)) / 100 if angle else (total(a) - total(b)) / 300
             belief = round(max(0.15, min(0.85, 0.5 + gap)), 2)
-            return JudgeOutput(plaintiff=a, defendant=b, unresolved=False, belief=belief,
+            # Rules cannot weigh an argument: a point with message evidence is noted as checked, and no score moves.
+            points = [DebatePoint(role=o["role"], claim=o["text"][:120], side="B" if o["role"] == "defense" else "A", item="evidence", evidence_indices=o["evidence_indices"],
+                                  accepted=bool(o["evidence_indices"]), direction="none",
+                                  reason="규칙 기반 예시: 근거 메시지 번호가 있는 논점만 확인으로 표시하고 점수는 바꾸지 않아요." if o["evidence_indices"] else "규칙 기반 예시: 근거 메시지 번호가 없어 채택하지 않았어요.")
+                      for o in payload.get("opinions", [])]
+            return JudgeOutput(debatePoints=points, plaintiff=a, defendant=b, unresolved=False, belief=belief,
                                summary=f"{josa(topic, '을', '를')} 둘러싼 갈등입니다. 약속의 중요성을 말한 쪽과 사정을 설명한 쪽 모두 이해할 수 있는 지점이 있고, 표현 방식에서 감정이 커졌습니다.",
                                recommendation=f"{josa(topic, '을', '를')} 언제 누가 할지 구체적으로 정하고, 지키기 어려우면 먼저 알려주기로 약속해보세요.",
                                humor=f"오늘의 메인 이벤트는 {topic}! 링 위의 말싸움은 잠시 내려놓고 태그팀으로 해결해볼까요?" if case.get("mode") == "WWE" else "")

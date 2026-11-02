@@ -90,6 +90,21 @@ export interface RoundTrace {
   beliefs?: number[];
   votes?: { A?: number; even?: number; B?: number };
   ksDelta?: number | null;
+  points?: DebatePoint[]; // every judge's rulings on this round's debate; round 0 (before the debate) has none
+}
+
+// A judge's ruling on one debater's point. Only accepted points backed by messages may move a score.
+export interface DebatePoint {
+  persona: 'logic' | 'empathy' | 'evidence';
+  role: 'prosecutor' | 'defense' | 'factcheck';
+  claim: string;
+  side: Speaker;
+  item: ScoreKey;
+  evidence_indices: number[];
+  accepted: boolean;
+  direction: 'up' | 'down' | 'none';
+  reason: string;
+  applied?: boolean; // the judge's score actually moved this way because of it
 }
 
 export type ScoreKey = 'logic' | 'emotionControl' | 'evidence';
@@ -114,6 +129,7 @@ export interface VerdictResult {
   rounds?: number;
   stopReason?: 'stable' | 'max_rounds';
   panelScores?: PanelScore[]; // each judge's own scores in the last round; the cards show their mean
+  initialScores?: Record<Speaker, Record<ScoreKey, number>> | null; // panel mean before the debate (absent before v8)
   snapshotVersion?: number;
   provider?: string;
   belief?: number;

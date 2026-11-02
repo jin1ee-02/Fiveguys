@@ -113,7 +113,7 @@ export default function VerdictScreen() {
       {stage === 'loading' && <View style={ui.card}>
         <ActivityIndicator size="large" color={colors.primary} accessibilityLabel="판결 응답 대기 중" />
         <Text style={ui.label}>잠시만 기다려주세요.</Text>
-        {FEATURE_SOURCE === 'mock' ? <>{phases.map((phase, index) => <Text key={phase} style={[ui.subtitle, index === step && { color: colors.primary, fontWeight: '800' }]}>{index < step ? '✓' : index === step ? '●' : '○'} {phase}</Text>)}<Text style={styles.caption}>발표용 진행 연출입니다. 실제 AI 토론이 실행되는 것은 아닙니다.</Text></> : <Text style={ui.subtitle}>대화를 쟁점·입장·사실관계로 정리한 뒤 검사 · 변호사 · 팩트체크가 토론하고 관점이 다른 심사위원단이 채점합니다. 판단이 안정되면 일찍 끝나요.</Text>}
+        {FEATURE_SOURCE === 'mock' ? <>{phases.map((phase, index) => <Text key={phase} style={[ui.subtitle, index === step && { color: colors.primary, fontWeight: '800' }]}>{index < step ? '✓' : index === step ? '●' : '○'} {phase}</Text>)}<Text style={styles.caption}>발표용 진행 연출입니다. 실제 AI 토론이 실행되는 것은 아닙니다.</Text></> : <Text style={ui.subtitle}>대화를 쟁점·입장·사실관계로 정리하고, 심사위원단이 먼저 실제 발화만으로 채점합니다. 이어서 검사 · 변호사 · 팩트체크가 그 채점을 두고 토론하고, 심사위원단이 논점을 채택하거나 기각하며 점수를 고칩니다. 판단이 안정되면 일찍 끝나요.</Text>}
         <ActionButton title="요청 취소" secondary onPress={cancel} />
       </View>}
 
@@ -132,11 +132,12 @@ export default function VerdictScreen() {
           <ActionButton title={showRubric ? '채점 기준 접기' : '채점 기준 보기'} secondary onPress={() => setShowRubric(!showRubric)} />
           {showRubric && <RubricTable />}
         </View>
+        {result.initialScores && <DebateEffect result={result} />}
         {result.rounds && <Text style={styles.caption}>{result.rounds}라운드 · {result.stopReason === 'stable' ? '판단이 안정되어 조기 종료' : '설정된 최대 라운드로 종료'}{result.modelCalls ? ` · 모델 호출 ${result.modelCalls}회` : ''}{result.usage ? ` · 입력 ${Math.round(result.usage.inputTokens)}토큰(캐시 ${Math.round(result.usage.cachedTokens)}) · ${Math.round(result.usage.seconds)}초` : ''} · 대화 버전 {result.snapshotVersion}</Text>}
         {result.roundTrace && result.roundTrace.length > 0 && <View style={ui.card}>
           <Text style={ui.label}>라운드별 판단 변화{result.judges && result.judges > 1 ? ` · 심사위원 ${result.judges}명` : ''}</Text>
           {result.roundTrace.map((trace) => <View key={trace.round} style={{ gap: 4 }}>
-            <Text style={styles.caption}>{trace.round}라운드 · A 쪽으로 {Math.round(trace.belief * 100)}%{trace.beliefDelta !== null ? ` · 기울기 변화 ${trace.beliefDelta.toFixed(2)} · 점수 변화 최대 ${Math.round(trace.scoreDelta ?? 0)}점` : ' · 첫 라운드'}{trace.votes ? ` · 의견 A ${trace.votes.A ?? 0} / 비슷 ${trace.votes.even ?? 0} / B ${trace.votes.B ?? 0}` : ''}</Text>
+            <Text style={styles.caption}>{trace.round === 0 ? '토론 전' : `${trace.round}라운드`} · A 쪽으로 {Math.round(trace.belief * 100)}%{trace.beliefDelta !== null ? ` · 기울기 변화 ${trace.beliefDelta.toFixed(2)} · 점수 변화 최대 ${Math.round(trace.scoreDelta ?? 0)}점` : ' · 실제 발화만으로 채점'}{trace.votes ? ` · 의견 A ${trace.votes.A ?? 0} / 비슷 ${trace.votes.even ?? 0} / B ${trace.votes.B ?? 0}` : ''}</Text>
             <View style={styles.track}><View style={{ height: 6, borderRadius: 3, backgroundColor: colors.primary, width: `${Math.round(trace.belief * 100)}%` }} /></View>
           </View>)}
           <Text style={styles.caption}>승패가 아니라 심사위원단의 판단이 라운드 사이에 얼마나 움직였는지를 보여줍니다. 점수와 의견 분포가 더 움직이지 않으면 토론을 멈춥니다.</Text>
@@ -154,7 +155,7 @@ export default function VerdictScreen() {
         </View>}
         <View style={ui.card}><Text style={ui.label}>판결 요약</Text><Text style={ui.subtitle}>{result.summary}</Text><Text style={ui.eyebrow}>다음 대화를 위한 제안</Text><Text style={ui.subtitle}>{result.recommendation}</Text></View>
         {result.humor ? <View style={[ui.card, { backgroundColor: '#FFF8DA' }]}><Text style={ui.label}>한 줄로 돌아보기</Text><Text style={ui.subtitle}>{result.humor}</Text></View> : null}
-        <View style={ui.card}><ActionButton title={showLog ? '토론 과정 접기' : '토론 과정 보기'} secondary onPress={() => setShowLog(!showLog)} />{showLog && <><Text style={styles.caption}>{result.source === 'mock' ? '역할별 발언의 UI 예시입니다.' : '역할별 에이전트가 순서대로 주고받은 발언입니다.'}</Text><ActionButton title={showStrategy ? '발언 전 전략 숨기기' : '발언 전 전략도 보기'} secondary onPress={() => setShowStrategy(!showStrategy)} />{result.debateLog.map((entry, index) => <View key={`${entry.role}-${index}`} style={styles.turn}><Text style={ui.eyebrow}>{entry.persona ? personas[entry.persona] : roles[entry.role]} · {entry.round}라운드{typeof entry.belief === 'number' ? ` · A 쪽으로 ${Math.round(entry.belief * 100)}%` : ''}</Text>{showStrategy && entry.strategy ? <Text style={styles.strategy}>전략: {entry.strategy}</Text> : null}<Text style={ui.subtitle}>{entry.text}</Text>{entry.evidenceIndices && entry.evidenceIndices.length > 0 ? <Text style={styles.caption}>근거: {entry.evidenceIndices.map((i) => i + 1).join(', ')}번 메시지</Text> : null}</View>)}</>}</View>
+        <View style={ui.card}><ActionButton title={showLog ? '토론 과정 접기' : '토론 과정 보기'} secondary onPress={() => setShowLog(!showLog)} />{showLog && <><Text style={styles.caption}>{result.source === 'mock' ? '역할별 발언의 UI 예시입니다.' : '역할별 에이전트가 순서대로 주고받은 발언입니다.'}</Text><ActionButton title={showStrategy ? '발언 전 전략 숨기기' : '발언 전 전략도 보기'} secondary onPress={() => setShowStrategy(!showStrategy)} />{result.debateLog.map((entry, index) => <View key={`${entry.role}-${index}`} style={styles.turn}><Text style={ui.eyebrow}>{entry.persona ? personas[entry.persona] : roles[entry.role]} · {entry.round === 0 ? '토론 전' : `${entry.round}라운드`}{typeof entry.belief === 'number' ? ` · A 쪽으로 ${Math.round(entry.belief * 100)}%` : ''}</Text>{showStrategy && entry.strategy ? <Text style={styles.strategy}>전략: {entry.strategy}</Text> : null}<Text style={ui.subtitle}>{entry.text}</Text>{entry.evidenceIndices && entry.evidenceIndices.length > 0 ? <Text style={styles.caption}>근거: {entry.evidenceIndices.map((i) => i + 1).join(', ')}번 메시지</Text> : null}</View>)}</>}</View>
         <ActionButton title="새 대화로 판결 요청하기" secondary onPress={() => { setContext(''); setShowContext(false); setStage('form'); }} />
         <ActionButton title="대화 이어가기" onPress={() => router.replace('/chat')} />
       </>}
@@ -162,6 +163,35 @@ export default function VerdictScreen() {
       {stage !== 'error' && error ? <Text style={ui.error}>{error}</Text> : null}
     </ScrollView>
   );
+}
+
+const arrows = { up: '↑', down: '↓', none: '확인' };
+
+// What the debate changed: the panel mean before the debate next to the final one, and the points judges accepted.
+function DebateEffect({ result }: { result: VerdictResult }) {
+  const [showOthers, setShowOthers] = useState(false);
+  const initial = result.initialScores!;
+  const points = (result.roundTrace ?? []).flatMap((trace) => (trace.points ?? []).map((point) => ({ ...point, round: trace.round })));
+  const applied = points.filter((point) => point.applied);
+  const others = points.filter((point) => !point.applied);
+  const label = (key: string) => SCORE_ITEMS.find((item) => item.key === key)?.label ?? key;
+  const ruling = (point: (typeof points)[number]) => point.applied ? `채택 · ${point.side} ${label(point.item)} ${arrows[point.direction]}` : point.accepted ? `채택 · ${point.side} ${label(point.item)} ${arrows[point.direction]} · 점수는 그대로` : '기각';
+  const line = (point: (typeof points)[number]) => <View key={`${point.round}-${point.persona}-${point.role}-${point.side}-${point.item}-${point.direction}-${point.claim.length}`} style={styles.turn}>
+    <Text style={ui.eyebrow}>{point.round}라운드 · {personas[point.persona]} · {roles[point.role]}의 논점 {ruling(point)}</Text>
+    <Text style={ui.subtitle}>{point.claim}</Text>
+    <Text style={styles.caption}>{point.reason}{point.evidence_indices.length ? ` · 근거 ${point.evidence_indices.map((i) => i + 1).join(', ')}번 메시지` : ''}</Text>
+  </View>;
+  return <View style={ui.card}>
+    <Text style={ui.label}>토론이 바꾼 점수</Text>
+    <Text style={styles.caption}>심사위원은 토론 전에 실제 발화만으로 먼저 채점하고, 라운드마다 토론자의 논점을 채택하거나 기각합니다. 점수는 메시지 근거가 있는 논점을 채택했을 때만, 같은 방향으로는 한 번만, 토론 전 점수에서 15점 안에서 바뀝니다.</Text>
+    {(['A', 'B'] as const).map((side) => <Text key={side} style={styles.caption}>{side} · {SCORE_ITEMS.map(({ key, label: name }) => {
+      const before = initial[side][key], after = (side === 'A' ? result.plaintiff : result.defendant)[key], change = Math.round((after - before) * 10) / 10;
+      return `${name} ${Math.round(before)} → ${Math.round(after)}${change ? ` (${change > 0 ? '+' : ''}${change})` : ''}`;
+    }).join(' · ')}</Text>)}
+    {applied.length ? <><Text style={ui.eyebrow}>점수를 움직인 논점 {applied.length}개</Text>{applied.map(line)}</> : <Text style={styles.caption}>점수를 움직인 논점이 없었어요. 토론 전 채점이 그대로 유지됐습니다.</Text>}
+    {others.length > 0 && <ActionButton title={showOthers ? '나머지 논점 접기' : `점수를 바꾸지 않은 논점 ${others.length}개 보기`} secondary onPress={() => setShowOthers(!showOthers)} />}
+    {showOthers && others.map(line)}
+  </View>;
 }
 
 const styles = StyleSheet.create({
