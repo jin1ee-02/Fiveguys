@@ -51,7 +51,7 @@ TYPESAFE_API_KEY=...         # 선택. 넣으면 LLM + JEV 하이브리드 분�
 2. 상대는 **다른 브라우저나 시크릿 창, 또는 다른 기기**에서 `코드로 참가하기`를 누릅니다. 같은 브라우저의 두 탭은 저장소를 공유해 한 사람으로 취급됩니다.
 3. 휴대폰에서 접속하려면 `frontend/.env`의 `EXPO_PUBLIC_API_URL`에 PC의 LAN 주소를 쓰고, `.\scripts\start-backend.ps1 -BindAddress 0.0.0.0`으로 서버를 띄우고, `backend/.env`의 `CORS_ORIGINS`에 그 웹 주소를 추가합니다.
 
-## 확인 상태 (2026-10-11)
+## 확인 상태 (2026-10-27)
 
 ```bash
 cd backend
