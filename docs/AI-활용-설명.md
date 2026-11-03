@@ -18,7 +18,7 @@
 | 기능 | 언제 호출되나 | 모델이 하는 일 | 코드가 하는 일 | 호출 수 |
 |---|---|---|---|---|
 | **Core State 구조화** | 메시지 전송 응답 뒤(백그라운드), 판결 때 뒤처졌으면 | 대화를 쟁점 / 화자별 입장 / 사실관계 / 상황 설명으로 정리 | 근거 번호 검증, 대화 버전 기록, 옛 결과가 새 결과를 덮지 않게 저장 | 메시지당 1회 |
-| **Light 분석** (언어 순화 + 감정 온도계) | 초안 입력 후 1초, 메시지 전송 시 | Core State를 참고해 갈등 신호 5개 + 표현된 감정을 JSON으로 출력. 순화 대안 3개는 제안이 뜬 초안에서 사용자가 볼 때 전용 호출로 작성 | 점수 합산, 임계값 판정, 온도 누적, 대안 검증 | 1회 (+ 대안 1회) |
+| **Light 분석** (언어 순화 + 감정 온도계) | 초안 입력 후 1초, 메시지 전송 시 | Core State를 참고해 갈등 신호 5개 + 자신도·근거를 JSON으로 출력. 순화 대안 3개는 제안이 뜬 초안에서 사용자가 볼 때 전용 호출로 작성 | 점수 합산, 임계값 판정, 온도 누적, 대안 검증 | 1회 (+ 대안 1회) |
 | **상대 반응 미리보기** | 초안 입력 후 1초 | 받는 사람의 입장(Core State)에 비추어 예상 감정 8종 확률 + 반응 강도 | 확률 정규화, 불확실하면 보류 | 1회 |
 | **심사위원단 첫 채점** (관점이 다른 판사 3명) | 판결 시작 때 한 번(0라운드) | 토론 없이 실제 발화만으로 6개 항목의 근거와 점수, belief | 토론 전 점수(`initialScores`)로 저장 | 3회(동시) |
 | **역할 토론** (검사·변호사·팩트체크) | 판결 라운드마다 | 심사위원단의 현재 점수와 논점 판정을 보고, 역할별로 **전략을 먼저 세우고** 공개 발언 작성, 앞 발언에 반박 | 발언 순서 제어, 전략 비공개 유지, 근거 번호 검증, 심사 피드백 전달 | 라운드당 3회 |
@@ -40,16 +40,16 @@ flowchart TD
     I[쟁점]
     B[상황 설명]
     F[사실관계]
-    T[감정 궤적]
+    T[갈등 궤적]
   end
 
   CORE -->|입장 · 쟁점 · 상황 설명| LIGHT
-  LIGHT -->|감정 궤적 쓰기| CORE
+  LIGHT -->|갈등 궤적 쓰기| CORE
   CORE -->|전부 읽기, 뒤처졌으면 갱신| HEAVY
 
   subgraph LIGHT[Light · 실시간 · 매 턴]
-    PF[사전 필터] --> L1[LLM 1회: 신호 + 감정]
-    L1 --> TH[감정 온도계]
+    PF[사전 필터] --> L1[LLM 1회: 갈등 신호]
+    L1 --> TH[감정 온도계: 사람별 누적]
     L1 --> PU[언어 순화]
     RE[상대 반응 미리보기]
   end
@@ -65,7 +65,7 @@ flowchart TD
   end
 ```
 
-기획서(p14)의 구조 그대로입니다. 입력이 들어오면 Core State를 만들고, Light와 Heavy가 같은 Core State를 각자의 용도에 맞게 읽습니다. Light는 표현 판단에 필요한 부분(입장·쟁점·상황 설명)만, Heavy는 사실관계와 감정 궤적까지 전부 읽습니다(3장).
+기획서(p14)의 구조 그대로입니다. 입력이 들어오면 Core State를 만들고, Light와 Heavy가 같은 Core State를 각자의 용도에 맞게 읽습니다. Light는 표현 판단에 필요한 부분(입장·쟁점·상황 설명)만, Heavy는 사실관계와 갈등 궤적까지 전부 읽습니다(3장).
 
 ### 1.3 코드 위치
 
@@ -75,7 +75,7 @@ flowchart TD
 | `backend/app/schemas.py` | 모델 출력 스키마(`LightOutput`, `CoreStateOutput`, `DebateOutput`, `JudgeOutput`) |
 | `backend/app/provider.py` | **LLM 연결 지점.** `OpenAIProvider.structured()` 하나로 모든 호출이 지나감 |
 | `backend/app/analysis.py` | Light 진입점(`light_analysis`), 사전 필터, provider 선택 |
-| `backend/app/scoring.py` | 모델이 관여하지 않는 계산: 갈등 점수, 온도 누적, 임계값, 온도계 |
+| `backend/app/scoring.py` | 모델이 관여하지 않는 계산: 갈등 점수, 온도 누적, 임계값. 온도계 단계는 앱의 `frontend/src/api/thermometer.ts` |
 | `backend/app/core_state.py` | Core State 생성·검증, 메시지 뒤 백그라운드 갱신, Light용 부분(`light_view`) |
 | `backend/app/verdict.py` | Heavy: 토론자·심사위원 에이전트 객체, 공개 게시판, 진행자(순서·집계·조기 종료) |
 | `backend/app/offline.py` | LLM 연결 전까지 쓰는 규칙 기반 대체물 |
@@ -137,7 +137,7 @@ OpenAIProvider.structured(prompt, payload, schema, tokens, shared=None)      bac
 
 | 프롬프트 | 호출하는 코드 | 언제 | 입력(payload) | 출력 스키마 (필드 순서대로) | 토큰 한도 | 받은 뒤 코드가 하는 일 |
 |---|---|---|---|---|---|---|
-| `LIGHT_PROMPT` | `provider.light()` ← `analysis.light_analysis()` ← `main.py`의 메시지 전송·초안 확인 | 초안 입력 1초 뒤, 메시지 전송 때 | relationship, recent_messages(최근 10개), target(화자·문장), core_state(쟁점·입장·상황 설명) | `LightOutput`: hostility, sarcasm, blame, repair, escalation_delta, emotion, confidence, rationale | 500 | 범위 검사(`FeatureScores`) → `scoring.conflict_score` → 온도 누적 → 순화 기준값 비교 → 온도계 단계 |
+| `LIGHT_PROMPT` | `provider.light()` ← `analysis.light_analysis()` ← `main.py`의 메시지 전송·초안 확인 | 초안 입력 1초 뒤, 메시지 전송 때 | relationship, recent_messages(최근 10개), target(화자·문장), core_state(쟁점·입장·상황 설명) | `LightOutput`: hostility, sarcasm, blame, repair, escalation_delta, confidence, rationale | 500 | 범위 검사(`FeatureScores`) → `scoring.conflict_score` → 온도 누적 → 순화 기준값 비교 → 온도계 단계 |
 | `ALTERNATIVES_PROMPT` (+ `CONTEXT_RULES`, 예시 3개) | `provider.alternatives()` ← `main.py` 초안 확인 | 제안이 뜬 초안에서 `대안 보기`·`↑`, 또는 `다듬기 제안 받기` | Light와 같음 | `AlternativesOutput`: **intent** → alternatives(3개) | 700 | 정확히 3개·서로 다름·원문과 다름 확인, intent는 버림 |
 | `REACTION_PROMPT` | `provider.reaction()` ← `main.py` `/v1/reactions/preview` | 초안 입력 1초 뒤 | sender, recipient, target, relationship, recent_messages, core_state | `ReactionOutput`: emotion(8종 중 하나), probabilities(8개), intensity, confidence | 500 | 확률 정규화, 신뢰도 0.55 미만이면 표시 보류 |
 | `CORE_STATE_PROMPT` | `core_state.build()` ← 메시지 전송 뒤 백그라운드 `core_state.refresh()`, 판결 때 `verdict.build_core_state()` | 메시지마다(응답 뒤), 판결 때 뒤처졌으면 | messages, relationship, context(판결 추가 상황), previous_core_state | `CoreStateOutput`: position_a, position_b, issues, facts(text·basis·evidence_indices), background | 900 | 말한 사람의 입장이 비지 않음·쟁점 1~4·사실 ≤6·근거 번호 범위 확인, 대화 버전과 함께 저장 |
@@ -146,7 +146,7 @@ OpenAIProvider.structured(prompt, payload, schema, tokens, shared=None)      bac
 | `JUDGE_PROMPT` (1라운드~) | `JudgeAgent.judge()` ← `Moderator.panel_round()` | 라운드마다 3명 동시 | shared=case / turn=persona, opinions(이번 라운드 공개 발언·근거 번호), previous_judgment(자기 직전 채점) | 위와 같음. **debatePoints**(role, claim, side, item, evidence_indices, accepted, direction, reason)를 점수보다 먼저 | 3000 | `check_points`(2A.4) → belief 보정 → 3명 평균 → 조기 종료 판정 |
 | `MEDIATOR_PROMPT` | `main.py` `/v1/rooms/{id}/mediation` | 화면 진입점 없음(API만) | requester, relationship, recent_messages | `MediationOutput`: text | 400 | 길이 확인, 대화방에 올리지 않음 |
 
-`EMOTION_PROMPT`(방 없는 시연 모드의 감정만 분석)와 `REWRITE_PROMPT`(대안 1개만 쓰던 초기 방식, 지금은 호출하는 곳 없음)도 파일에 있습니다.
+`REWRITE_PROMPT`(대안 1개만 쓰던 초기 방식, 지금은 호출하는 곳 없음)도 파일에 있습니다. 감정만 따로 분석하던 `EMOTION_PROMPT`는 2026-11-03에 온도계를 갈등 온도로 바꾸면서 지웠습니다.
 
 ### 2A.3 출력 필드 순서로 "생각하는 순서"를 정한다
 
@@ -196,7 +196,7 @@ OpenAIProvider.structured(prompt, payload, schema, tokens, shared=None)      bac
 | **쟁점** | 〃 | 〃 | ✅ | ✅ |
 | **상황 설명** | 〃 | 〃 | ✅ | ✅ |
 | **사실관계** | 〃 (누가 말했는지 `basis`와 근거 메시지 번호 포함) | 〃 | ❌ | ✅ |
-| **감정 궤적** | Light 호출이 매 메시지마다 `emotion`(0~4)과 갈등 점수를 남김 | `messages.result` | 온도계로 표시 | ✅ |
+| **갈등 궤적** | Light 호출이 매 메시지마다 갈등 점수를 남김 | `messages.result` | 사람별로 누적해 온도계로 표시 | ✅ |
 
 **갱신 시점.** 메시지를 보내면 서버는 Light 분석 결과와 새 방 상태를 먼저 돌려주고, 응답 뒤 백그라운드에서 Core State를 1회 갱신합니다(FastAPI `BackgroundTasks`). 최근 10개 메시지와 직전 Core State를 `previous_core_state`로 함께 넘겨 "유지할 내용은 유지하고 바뀐 부분만 갱신"하게 합니다. 단순 응답(사전 필터 통과)은 건너뜁니다. 같은 방의 갱신이 아직 도는 중에 다음 메시지가 오면 그 메시지의 갱신도 건너뜁니다. 이때 Core State가 메시지 하나만큼 늦을 수 있고, 다음 메시지의 갱신이나 판결(버전을 보고 다시 만듦)이 따라잡습니다. 그 사이 초안 분석은 한 메시지 늦은 정리를 받습니다. 결과는 어느 대화 버전으로 만들었는지와 함께 저장하고, 늦게 끝난 옛 갱신은 새 결과를 덮어쓰지 못합니다. 갱신이 실패해도 채팅에는 영향이 없고 직전 Core State가 남습니다.
 
@@ -207,11 +207,11 @@ OpenAIProvider.structured(prompt, payload, schema, tokens, shared=None)      bac
 | 메시지 분석·초안 확인 (`LIGHT_PROMPT`) | "그거", "또", "맨날"이 가리키는 대상, 칭찬처럼 보이는 말이 쟁점에 대한 비꼼인지, 사과가 쟁점에 답하는지 | 어느 쪽이 옳은지 채점 금지. 정당한 불만도 표현이 차분하면 낮게 |
 | 순화 대안 (`ALTERNATIVES_PROMPT`) | 보내는 사람 **자신의** 입장으로 지시어와 생략된 대상을 풀어 쓰기 | 쟁점 전체 정리, 해결책 제안 금지(v5에서 대안이 쟁점의 모범 답안이 됐던 문제) |
 | 상대 반응 미리보기 (`REACTION_PROMPT`) | **받는 사람의** 입장, 즉 이미 무엇에 불만인지에 비추어 반응 예상 | 실제 마음을 단정하지 않음 |
-| 감정 온도계 | 따로 읽지 않음. Core State를 받은 Light 호출의 `emotion`을 그대로 표시 | — |
+| 감정 온도계 | 따로 읽지 않음. Core State를 받은 Light 호출이 남긴 갈등 점수를 사람별로 누적 | — |
 
-사실관계와 감정 궤적을 Light에 주지 않는 이유는, Light는 "이 한 문장의 표현"을 판단하기 때문입니다. "누가 무엇을 했나"가 들어가면 표현이 아니라 입장을 채점할 위험이 커집니다. 갈등 온도를 모델에 넣지 않는 것([4.2](#42-프롬프트-설계))과 같은 이유입니다.
+사실관계와 갈등 궤적을 Light에 주지 않는 이유는, Light는 "이 한 문장의 표현"을 판단하기 때문입니다. "누가 무엇을 했나"가 들어가면 표현이 아니라 입장을 채점할 위험이 커집니다. 갈등 온도를 모델에 넣지 않는 것([4.2](#42-프롬프트-설계))과 같은 이유입니다.
 
-**Heavy가 읽는 방식.** 판결은 저장된 Core State가 지금 대화 버전으로 만든 것이면 그대로 쓰고, 없거나 뒤처졌으면(직전 메시지의 갱신이 아직 끝나지 않았거나 실패한 경우) 그 자리에서 한 번 다시 만들어 저장합니다. 여기에 저장된 메시지에서 감정 궤적을 붙여 토론자와 심사위원의 공통 자료(`case.core_state`)로 씁니다.
+**Heavy가 읽는 방식.** 판결은 저장된 Core State가 지금 대화 버전으로 만든 것이면 그대로 쓰고, 없거나 뒤처졌으면(직전 메시지의 갱신이 아직 끝나지 않았거나 실패한 경우) 그 자리에서 한 번 다시 만들어 저장합니다. 여기에 저장된 메시지에서 갈등 궤적을 붙여 토론자와 심사위원의 공통 자료(`case.core_state`)로 씁니다.
 
 **비용.** 짧은 응답을 빼면 메시지당 호출이 1회 → 2회로 늘었습니다. 응답 뒤에 돌기 때문에 전송 대기 시간은 늘지 않고, 판결은 1회 줄었습니다. 2026-10-27에 실제 `gpt-4o-mini`로 3개 메시지를 보내 매번 갱신되고(대화 버전 3/3) 다음 초안 분석에 Core State가 들어가는 것을 확인했습니다. Core State가 들어간 뒤 채점·대안·반응의 품질이 좋아졌는지는 아직 측정하지 않았습니다.
 
@@ -232,7 +232,6 @@ OpenAIProvider.structured(prompt, payload, schema, tokens, shared=None)      bac
   "blame": 3,              // 비난·일반화 0~4
   "repair": 0,             // 관계 회복 시도 0~4
   "escalation_delta": 1,   // 직전 대비 격화 -2~2
-  "emotion": 3,            // 화자가 표현한 분노·긴장 0~4  → 감정 온도계
   "confidence": 3,         // 판단 자신도 0~4
   "rationale": "…"         // 한 문장 근거
 }
@@ -323,14 +322,15 @@ confidence ≤ 1 이면 점수와 무관하게 "판단 보류"
 
 두 번째 조건은 이번에 추가했습니다. 기획서의 대표 예시 "진짜 대단하시네 ㅋㅋ 맨날 그 모양이지"는 비꼼과 비난이 뚜렷하지만 욕설이 없어 가중합이 45~54점에 그치고, 대화가 차분할 때의 임계값(65~70)을 넘지 못해 **제안이 뜨지 않았습니다.** 명백한 신호 하나면 충분하도록 규칙을 보완했습니다. 사용자가 고르던 순화 민감도(낮음/보통/높음, 임계값 ±10)는 2026-10-27에 뺐고, 지금 기준은 예전 `보통`과 같습니다.
 
-감정 온도계:
+감정 온도계 (사람별):
 
 ```text
-단계 = emotion + 1            # 1 평온 · 2 주의 · 3 경고 · 4 위험 · 5 폭발
-추세 = 같은 화자의 직전 메시지와 비교 (↑ / → / ↓)
+내 감정 온도 = 0.7 × 내 직전 감정 온도 + 0.3 × 내 이번 메시지의 갈등 점수   # 갈등 온도와 같은 식, 내 메시지만
+단계 = 0~20 평온 · 20~40 주의 · 40~60 경고 · 60~80 위험 · 80~ 폭발
+추세 = 내 직전 메시지를 보내기 전 온도와 비교 (↑ / → / ↓, 1도 미만은 →)
 ```
 
-기획서 p12의 "나의 감정 / 상대 감정" 동시 표시를 반영했습니다. p11의 "관계 유형별 민감도 자동 조절"은 위 순화 임계값의 관계 보정으로 남아 있습니다(사용자가 고르는 설정이 아니라 관계 유형에 따른 자동 보정). 온도계 단계에 따라 창을 띄우던 쿨다운 알림은 시연에서 대화 흐름을 끊는다는 피드백으로 제거했습니다.
+기획서 p12의 "나의 감정 / 상대 감정" 동시 표시를 반영했습니다. 2026-11-03 전에는 Light 호출이 `emotion`(표현된 분노·긴장 0~4)을 따로 매기고 온도계가 그 사람의 마지막 메시지 `emotion`만 보여줘서, 같은 메시지에 갈등 점수와 감정 단계가 따로 움직이고 메시지 하나로 1단계에서 5단계로 뛰었습니다. 지금은 `emotion`을 없애고 갈등 점수를 사람별로 누적합니다. 경계 40·60·80은 순화 임계값이 엄격해지는 구간과 같습니다. p11의 "관계 유형별 민감도 자동 조절"은 위 순화 임계값의 관계 보정으로 남아 있습니다(사용자가 고르는 설정이 아니라 관계 유형에 따른 자동 보정). 온도계 단계에 따라 창을 띄우던 쿨다운 알림은 시연에서 대화 흐름을 끊는다는 피드백으로 제거했습니다.
 
 ### 4.4 사전 필터와 캐시
 
@@ -565,7 +565,7 @@ v3까지의 기준은 "근거 없는 단정은 0~25, 혼합된 설명은 40~60, 
 
 ## 6. 상대 반응 미리보기
 
-초안을 보내기 전에 "받는 사람이 이 문장을 보면 어떤 감정을 느낄 가능성이 높은가"를 보여줍니다. 온도계가 **이미 보낸 내 말**을 평가한다면, 이것은 **아직 안 보낸 말이 상대에게 미칠 영향**을 추정합니다.
+초안을 보내기 전에 "받는 사람이 이 문장을 보면 어떤 감정을 느낄 가능성이 높은가"를 보여줍니다. 온도계가 **내가 이미 보낸 말들**이 얼마나 날이 서 있었는지 보여준다면, 이것은 **아직 안 보낸 말이 상대에게 미칠 영향**을 추정합니다.
 
 출력은 감정 8종(중립·기쁨·슬픔·분노·놀람·두려움·불쾌·경멸)의 확률 분포와 전체 반응 강도(0~1), 신뢰도입니다. 신뢰도가 0.55 미만이면 감정과 강도를 숨기고 "애매해서 보류"를 표시합니다. JEV의 응답은 확률의 합이 1인지, 선택된 감정이 최고 확률 범주인지까지 확인합니다. LLM의 응답에는 이 검증을 걸지 않습니다. 생성 모델은 감정 이름은 잘 고르지만 8개 확률값은 거칠어서, 같은 검증을 걸었을 때 `gpt-4o-mini` 응답의 절반이 거부됐기 때문입니다. LLM 경로에서는 모델이 고른 감정 이름을 쓰고 확률은 합이 1이 되게 정규화해 참고값으로만 전달합니다.
 
@@ -622,7 +622,7 @@ JEV에 보내는 질문은 LLM 루브릭과 같은 단계 설명을 쓰는 Score
 | 방법 | 내용 | 효과 |
 |---|---|---|
 | **대안 지연 호출** | 채점은 초안마다 1회, 대안은 제안이 뜨고 사용자가 볼 때만 1회 | 문제없는 초안은 1회로 끝남 |
-| **온도계 무호출** | 저장된 Light 결과로 양쪽 온도계 계산 | 메시지당 감정 분석 호출 0회 |
+| **온도계 무호출** | 저장된 메시지별 갈등 점수로 양쪽 온도계 계산 | 온도계용 호출 0회 |
 | **사전 필터** | 단순 응답은 모델 생략 | "ㅇㅇ", "넵" 류 호출 제거 |
 | **결과 캐시** (60초) | 초안 분석 결과를 전송 시 재사용 | "그대로 보내기" 시 분석 0회(Core State 갱신 1회는 따로 나감) |
 | **Core State 응답 뒤 갱신** | 메시지 응답을 먼저 돌려주고 백그라운드에서 1회. 단순 응답은 건너뜀 | 전송 대기 시간 증가 없음. 판결은 다시 만들지 않아 1회 절약 |
@@ -699,7 +699,7 @@ python -m scripts.evaluate_rewrite --similarity --toxicity
 
 순화 평가. 원문과 대안의 갈등 점수, 문장 임베딩 유사도(의미 보존), 한국어 독성 분류 점수를 비교합니다. 기획서의 Perspective API는 2026년 말 종료 예정이고 신규 신청을 받지 않아 독성 분류 모델로 대체했습니다.
 
-AITA(`evaluate_verdict --aita`)와 MELD(`evaluate --meld`) 로더, 논문 방식의 라운드 안정성 분석(`evaluate_verdict --stability`)도 있습니다. 자세한 사용법과 한계는 [논문·소스코드 적용 검토](논문-소스코드-적용-검토.md) 6장을 보세요.
+AITA(`evaluate_verdict --aita`) 로더(MELD 로더는 `emotion` 항목과 함께 2026-11-03에 제거), 논문 방식의 라운드 안정성 분석(`evaluate_verdict --stability`)도 있습니다. 자세한 사용법과 한계는 [논문·소스코드 적용 검토](논문-소스코드-적용-검토.md) 6장을 보세요.
 
 ---
 
@@ -729,7 +729,7 @@ def structured(self, prompt, payload, schema, tokens=1600, shared=None):
     → schema 인스턴스를 반환"""
 ```
 
-같은 시그니처의 `structured`를 가진 클래스를 만들고 `get_provider()`에서 반환하면 Light·Core State·토론·판사·반응 미리보기가 모두 그 모델로 동작합니다. `light`, `alternatives`, `emotion`, `reaction`은 `structured`를 호출하는 얇은 메서드이므로 `OpenAIProvider`를 상속해 `structured`만 바꾸는 것이 가장 간단합니다.
+같은 시그니처의 `structured`를 가진 클래스를 만들고 `get_provider()`에서 반환하면 Light·Core State·토론·판사·반응 미리보기가 모두 그 모델로 동작합니다. `light`, `alternatives`, `reaction`은 `structured`를 호출하는 얇은 메서드이므로 `OpenAIProvider`를 상속해 `structured`만 바꾸는 것이 가장 간단합니다.
 
 ### 연결 후 확인 순서
 
@@ -765,12 +765,16 @@ def structured(self, prompt, payload, schema, tokens=1600, shared=None):
 - 판결 1건, 초안 확인 12건, 상대 반응 12건, 두 사람의 동시 전송을 한꺼번에 보내 모두 정상 응답
 - 브라우저에서 온도계(창이 뜨지 않음), 순화 시트, 상대 반응, 판결 화면의 항목별 근거 표시
 
+**확인한 것 (2026-11-03, `emotion` 제거와 사람별 누적 온도계)**
+- 실제 `gpt-4o-mini`로 대화방에 A의 메시지 2개를 보내 A의 온도계가 누적값으로 표시되는 것(`내 메시지 2개 누적 · 14/100 · 상승 중 ↑`), 상대가 아직 말하지 않았으면 `아직 메시지 없음`, 지운 `/v1/emotions/analyze`가 404인 것
+- 백엔드 테스트 46개, 프론트 타입 검사·ESLint·단위 테스트 5개 통과
+
 **확인한 것 (2026-10-27)**
 - 실제 `gpt-4o-mini`로 메시지 3개를 보내 Core State가 매번 갱신되고(대화 버전 3/3) 다음 초안 분석에 들어가는 것, 한 사람만 말한 상태에서도 갱신이 검증을 통과하는 것
 - 백엔드 테스트 45개, 프론트 타입 검사·ESLint·단위 테스트 5개 통과
 
 **확인한 것 (2026-10-07, 오프라인 규칙)**
-- 백엔드 테스트 통과 (`python -m unittest discover -s tests`). 지금의 45개는 방 권한, 중복 전송, Light 출력, 사전 필터, 양쪽 온도계, 메시지마다 갱신되는 Core State와 Light 전달(다른 참가자 토큰 거부 포함), 에이전트 객체 분리와 비공개 기억, 발언 순서와 전략 비공개, 조기 종료, 판결 재조회, 반론 API 없음을 다룸
+- 백엔드 테스트 통과 (`python -m unittest discover -s tests`). 당시 45개는 방 권한, 중복 전송, Light 출력, 사전 필터, 양쪽 온도계, 메시지마다 갱신되는 Core State와 Light 전달(다른 참가자 토큰 거부 포함), 에이전트 객체 분리와 비공개 기억, 발언 순서와 전략 비공개, 조기 종료, 판결 재조회, 반론 API 없음을 다룸
 - 프론트 TypeScript 검사, ESLint, 단위 테스트 5개 통과
 - 브라우저에서 두 참가자(A/B)로 실제 구동: 방 생성 → 초대 코드 참가 → 메시지 동기화 → 양쪽 온도계 → 초안 순화 대안 3개 → 상대 반응 미리보기 → 판결(2라운드 조기 종료, 심사위원 3명, 호출 13회) → Core State·토론 과정 표시 → 상대편 기기에서 반론(당시 기능, 지금은 제거) → 서버 재시작 후 판결 기록 유지
 - 위 구동은 전부 **오프라인 규칙 모드**에서 수행
@@ -793,14 +797,14 @@ def structured(self, prompt, payload, schema, tokens=1600, shared=None):
 | 기능 ON/OFF (p9) | ✅ | |
 | 민감도 조절 (p9) | ➖ | 2026-10-27 제거. 관계 유형별 자동 보정만 남김 |
 | 감정 온도계 5단계 (p11~12) | ✅ | 쿨다운 알림은 시연 피드백으로 제거 |
-| 나와 상대 감정 동시 표시 (p12) | ✅ | 이번에 추가 |
+| 나와 상대 감정 동시 표시 (p12) | ✅ | 2026-11-03부터 사람별 갈등 점수 누적으로 계산 |
 | 관계 유형별 민감도 (p11) | ✅ | 순화 임계값 |
-| 판결 시점 감정 상태 반영 (p11) | ✅ | Core State 감정 궤적 |
+| 판결 시점 감정 상태 반영 (p11) | ✅ | Core State 갈등 궤적(메시지별 갈등 점수) |
 | 다툼 판결: 항목별 점수, 강·약점 (p7~8) | ✅ | |
 | 검사·변호사·팩트체크·판사 역할 분리 (p8, p15) | ✅ | 순차 반박, 순서 교대, 심사위원 3명 |
 | WWE / UFC 모드 (p7) | ✅ | 같은 루브릭, 연출만 다름 |
-| Core State: 입장·감정 궤적·쟁점·사실관계 (p14~15) | ✅ | 메시지마다 백그라운드 갱신 |
-| Light: LLM 1회 통합 출력 (p13~14) | 🔶 | 신호·감정은 1회 통합. 대안은 화자 뒤바뀜 때문에 10월 11일에 전용 호출로 분리 |
+| Core State: 입장·갈등 궤적·쟁점·사실관계 (p14~15) | ✅ | 메시지마다 백그라운드 갱신 |
+| Light: LLM 1회 통합 출력 (p13~14) | 🔶 | 갈등 신호는 1회 통합(감정 항목은 2026-11-03에 갈등 온도로 대체). 대안은 화자 뒤바뀜 때문에 10월 11일에 전용 호출로 분리 |
 | Prompt caching, 사전 필터 (p14) | ✅ | caching은 구조만 준비, 효과 미측정 |
 | Adaptive stopping (p18~20) | ✅ | 심사위원 의견 분포의 KS 거리. 논문 원래 방식은 오프라인 분석으로 구현 |
 | 비공개 전략 → 공개 발언, 전체 로깅 (p21) | ✅ | 이번에 추가 |
@@ -810,7 +814,7 @@ def structured(self, prompt, payload, schema, tokens=1600, shared=None):
 | 독립된 에이전트 (p15~17) | ✅ | 토론자·심사위원이 각자 객체, 진행자가 차례를 정함(5.2) |
 | LLMediator 방식 순화 (p22) | ✅ | 고쳐서 보내기, 수동 요청. 중재 제안은 API만 남음 |
 | AITA 형식 판결 평가 (p23, p26) | 🔶 | 로더와 예시 4개. 데이터는 직접 내려받아야 함 |
-| MELD / SBERT 평가 (p26) | 🔶 | 스크립트 준비. 실데이터로 미실행 |
+| MELD / SBERT 평가 (p26) | 🔶 | SBERT 스크립트 준비, 실데이터로 미실행. MELD는 감정 항목과 함께 제거 |
 | Perspective API 평가 (p26) | ➖ | 서비스 종료 예정. 독성 분류 모델로 대체 |
 | LangGraph (p16) | ❌ | 명시적 Python 루프로 구현. 그래프가 단순해 의존성을 추가하지 않음 |
 | PostgreSQL (p16) | ❌ | SQLite 사용. 단일 서버 시연에 충분 |

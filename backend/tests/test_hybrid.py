@@ -15,7 +15,7 @@ REQUEST = ConversationInput(speaker="A", text="역시 대단하시네요^^", rec
 
 
 def features(version, **values):
-    base = {"hostility": 0, "sarcasm": 0, "blame": 0, "repair": 0, "escalation_delta": 0, "emotion": 0, "confidence": 3, "rationale": "근거"}
+    base = {"hostility": 0, "sarcasm": 0, "blame": 0, "repair": 0, "escalation_delta": 0, "confidence": 3, "rationale": "근거"}
     return FeatureScores(**{**base, **values}, model_version=version)
 
 
@@ -52,9 +52,9 @@ def jev_response(request: httpx.Request) -> httpx.Response:
 
 class HybridTests(unittest.TestCase):
     def test_agreeing_raters_are_averaged_and_keep_alternatives(self):
-        analyzer = HybridAnalyzer(Rater("gpt", features("openai/gpt", sarcasm=4, blame=2, emotion=2, confidence=4)), Rater("jev", features("jev-1.13.0", sarcasm=3, blame=3, emotion=3, confidence=3)))
+        analyzer = HybridAnalyzer(Rater("gpt", features("openai/gpt", sarcasm=4, blame=2, confidence=4)), Rater("jev", features("jev-1.13.0", sarcasm=3, blame=3, confidence=3)))
         result, alternatives = analyzer.light(REQUEST)
-        self.assertEqual((result.sarcasm, result.blame, result.emotion, result.confidence), (4, 3, 3, 3))
+        self.assertEqual((result.sarcasm, result.blame, result.confidence), (4, 3, 3))
         self.assertEqual(result.model_version, "hybrid/openai/gpt+jev-1.13.0")
         self.assertEqual(len(alternatives), 3)
 
@@ -81,7 +81,7 @@ class HybridTests(unittest.TestCase):
             with patch.dict("os.environ", {**environment, "ANALYSIS_PROVIDER": "auto", "LLM_PROVIDER": "auto"}):
                 self.assertEqual(analysis_mode(), expected)
 
-    def test_jev_adapter_parses_the_documented_response_including_emotion(self):
+    def test_jev_adapter_parses_the_documented_response(self):
         provider = JevProvider("key", "jev-1.13.0")
         provider.cache_enabled = False
         sent = {}
@@ -90,8 +90,9 @@ class HybridTests(unittest.TestCase):
             return jev_response(request)
         provider.client = httpx.Client(transport=httpx.MockTransport(handler))
         result = provider.analyze(REQUEST)
-        self.assertEqual(set(sent["questions"]), {"hostility", "sarcasm", "blame", "repair", "escalation_delta", "emotion"})
-        self.assertEqual((result.sarcasm, result.emotion, result.escalation_delta, result.confidence, result.model_version), (3, 3, 1, 3, "jev-1.13.0"))
+        self.assertEqual(set(sent["questions"]), {"hostility", "sarcasm", "blame", "repair", "escalation_delta"})
+        self.assertEqual((result.sarcasm, result.escalation_delta, result.confidence, result.model_version), (3, 1, 3, "jev-1.13.0"))
+        self.assertNotIn("emotion", result.model_dump())
         reaction = provider.reaction(ReactionInput(speaker="A", recipient="B", text="역시 대단하시네요^^", draft_revision="r1"))
         self.assertEqual((reaction[0], round(reaction[2], 3)), ("contempt", 0.725))
 

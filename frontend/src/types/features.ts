@@ -1,8 +1,7 @@
 import type { ChatTurn, ConversationInput, Speaker } from './api';
 
 export type FeatureSource = 'mock' | 'api';
-export type EmotionLevel = 1 | 2 | 3 | 4 | 5;
-export type EmotionTrend = 'up' | 'flat' | 'down';
+export type ThermometerLevel = 1 | 2 | 3 | 4 | 5;
 export type VerdictMode = 'WWE' | 'UFC';
 
 export interface RoomSettings {
@@ -22,22 +21,21 @@ export interface DraftReview {
   source: FeatureSource;
 }
 
-export interface EmotionRequest {
-  speaker: Speaker;
-  relationship: string;
-  recent_messages: ChatTurn[];
+// One person's thermometer: the conflict scores of that person's own messages, accumulated like the room temperature.
+export interface Thermometer {
+  subject: Speaker;
+  temperature: number;
+  level: ThermometerLevel;
+  trend: 'up' | 'flat' | 'down' | null;
+  messageCount: number;
+  recommendation: string;
+  provider?: string | null;
+  source: FeatureSource;
 }
 
-export interface EmotionResult {
-  subject: Speaker;
-  level: EmotionLevel | null;
-  trend: EmotionTrend | null;
-  status?: 'ok' | 'uncertain' | 'insufficient_context';
-  confidence?: number | null;
-  provider?: string;
-  recommendation: string;
-  contextCount: number;
-  source: FeatureSource;
+export interface Thermometers {
+  mine: Thermometer | null;
+  partner: Thermometer | null;
 }
 
 export interface VerdictRequest {
@@ -78,7 +76,7 @@ export interface CoreState {
   issues: string[];
   facts: { text: string; basis: Speaker | 'both'; evidence_indices: number[] }[];
   background: string;
-  trajectory: { index: number; speaker: Speaker; emotion: number | null; conflict: number }[];
+  trajectory: { index: number; speaker: Speaker; conflict: number }[];
 }
 
 export interface RoundTrace {
@@ -175,7 +173,6 @@ export interface RoomState {
   participantCount: number;
   messages: import('./api').Message[];
   settings: RoomSettings;
-  emotions?: Record<Speaker, Omit<EmotionResult, 'source'>>;
 }
 
 export interface AsyncState<T> {

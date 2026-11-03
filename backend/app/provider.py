@@ -16,8 +16,8 @@ from dotenv import load_dotenv
 from fastapi import HTTPException
 from openai import OpenAI
 
-from app.prompts import LIGHT_PROMPT, REWRITE_PROMPT, ALTERNATIVES_PROMPT, EMOTION_PROMPT, REACTION_PROMPT, PROMPT_VERSION
-from app.schemas import AlternativesOutput, ConversationInput, EmotionOutput, FeatureScores, LightOutput, ReactionOutput, RewriteOutput
+from app.prompts import LIGHT_PROMPT, REWRITE_PROMPT, ALTERNATIVES_PROMPT, REACTION_PROMPT, PROMPT_VERSION
+from app.schemas import AlternativesOutput, ConversationInput, FeatureScores, LightOutput, ReactionOutput, RewriteOutput
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
@@ -66,14 +66,6 @@ class OpenAIProvider:
             raise ModelOutputError("순화 대안 3개가 유효하지 않습니다.")
         return alternatives
 
-    def emotion(self, request):
-        result = self.structured(EMOTION_PROMPT, request.model_dump(), EmotionOutput, 300)
-        import math
-        values = [result.current_score, result.confidence] + ([result.previous_score] if result.previous_score is not None else [])
-        if any(not math.isfinite(value) for value in values) or not 0 <= result.current_score <= 4 or not 0 <= result.confidence <= 1 or (result.previous_score is not None and not 0 <= result.previous_score <= 4):
-            raise ModelOutputError("감정 점수가 유효하지 않습니다.")
-        return result.current_score, result.previous_score, result.confidence, f"openai/{self.model}"
-
     def reaction(self, request):
         from app.jev import EMOTIONS
         result = self.structured(REACTION_PROMPT, {"sender": request.speaker, "recipient": request.recipient, "target": request.text, "relationship": request.relationship, "core_state": request.core_state, "recent_messages": [t.model_dump() for t in request.recent_messages]}, ReactionOutput, 500)
@@ -103,7 +95,7 @@ class OpenAIProvider:
         )
 
     def light(self, request: ConversationInput) -> tuple[FeatureScores, list[str]]:
-        """Light path: signals + expressed emotion in a single call. Alternatives are requested separately, only when needed."""
+        """Light path: the conflict signals in a single call. Alternatives are requested separately, only when needed."""
         from app.runtime import analysis_cache
         def operation():
             result = self.structured(LIGHT_PROMPT, json.loads(self._payload(request)), LightOutput, 500)

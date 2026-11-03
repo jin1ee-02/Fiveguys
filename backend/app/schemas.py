@@ -59,13 +59,12 @@ class ModelFeatures(StrictModel):
     blame: int
     repair: int
     escalation_delta: int
-    emotion: int
     confidence: int
     rationale: str
 
 
 class LightOutput(ModelFeatures):
-    """Light path: conflict signals and expressed emotion from one call. Alternatives come from their own call (AlternativesOutput)."""
+    """Light path: conflict signals from one call. Alternatives come from their own call (AlternativesOutput)."""
 
 
 class FeatureScores(ModelFeatures):
@@ -74,8 +73,6 @@ class FeatureScores(ModelFeatures):
     blame: int = Field(ge=0, le=4)
     repair: int = Field(ge=0, le=4)
     escalation_delta: int = Field(ge=-2, le=2)
-    # Speaker's expressed anger/tension in this message; None for results stored before v2.
-    emotion: int | None = Field(default=None, ge=0, le=4)
     confidence: int = Field(ge=0, le=4)
     rationale: str = Field(max_length=500)
     model_version: str | None = None
@@ -107,23 +104,6 @@ Speaker = Literal["A", "B"]
 EmotionName = Literal["neutral", "happy", "sad", "angry", "surprised", "fear", "disgust", "contempt"]
 
 
-class EmotionInput(StrictModel):
-    speaker: Speaker
-    relationship: str = Field(default="친구", max_length=100)
-    recent_messages: list[ChatTurn] = Field(max_length=10)
-
-
-class EmotionResult(StrictModel):
-    subject: Speaker
-    status: Literal["ok", "uncertain", "insufficient_context"]
-    level: int | None = Field(ge=1, le=5)
-    trend: Literal["up", "flat", "down"] | None
-    recommendation: str
-    contextCount: int
-    confidence: float | None = Field(ge=0, le=1)
-    provider: str
-
-
 class ReactionInput(ConversationInput):
     speaker: Speaker
     recipient: Speaker
@@ -147,12 +127,6 @@ class AlternativesOutput(StrictModel):
     # Written before the alternatives so they stay the target speaker's own point (who says what to whom); not returned to the client.
     intent: str = ""
     alternatives: list[str]
-
-
-class EmotionOutput(StrictModel):
-    current_score: float
-    previous_score: float | None
-    confidence: float
 
 
 class ReactionOutput(StrictModel):
@@ -235,14 +209,16 @@ class CoreStateOutput(StrictModel):
 
 
 class TrajectoryPoint(StrictModel):
+    # Verdicts saved before v9 also stored an emotion value per point; it is ignored when they are reopened.
+    model_config = ConfigDict(extra="ignore")
+
     index: int
     speaker: Speaker
-    emotion: int | None
     conflict: float
 
 
 class CoreState(CoreStateOutput):
-    """Shared state of PDF p14: positions, emotion trajectory, issues, facts."""
+    """Shared state of PDF p14: positions, conflict trajectory, issues, facts."""
 
     trajectory: list[TrajectoryPoint] = Field(default_factory=list)
 

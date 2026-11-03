@@ -32,6 +32,6 @@ export default function ChatListScreen() {
       </View>)}
     </> : <View style={ui.card}><Text style={ui.label}>시연 대화방</Text><Text style={ui.subtitle}>사용자 A · 사용자 B / {relationship}</Text><ActionButton title="시연 시작하기 →" onPress={() => router.push('/chat')} /></View>}
     {error || syncError ? <Text accessibilityRole="alert" style={ui.error}>{error || syncError}</Text> : null}
-    <View style={ui.card}><Text style={ui.label}>대화를 돕는 네 가지 기능</Text><Text style={ui.subtitle}>언어 순화, 나의 감정 온도계, 상대 반응 미리보기와 다툼판결로 서로의 입장과 다음 대화를 살펴보세요. AI 모드에서는 전송 메시지와 켠 기능의 분석 입력이 설정한 모델 서비스로 전달됩니다.</Text></View>
+    <View style={ui.card}><Text style={ui.label}>대화를 돕는 네 가지 기능</Text><Text style={ui.subtitle}>언어 순화, 나와 상대의 감정 온도계, 상대 반응 미리보기와 다툼판결로 서로의 입장과 다음 대화를 살펴보세요. AI 모드에서는 전송 메시지와 켠 기능의 분석 입력이 설정한 모델 서비스로 전달됩니다.</Text></View>
   </ScrollView>;
 }

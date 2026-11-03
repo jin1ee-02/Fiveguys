@@ -5,7 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { FEATURE_SOURCE } from '../api/features';
 import { newRequestId } from '../api/client';
 import { MessageBubble } from '../components/MessageBubble';
-import { EmotionCard } from '../components/features/EmotionCard';
+import { ThermometerCard } from '../components/features/ThermometerCard';
 import { FeatureToggle } from '../components/features/FeatureToggle';
 import { PurificationSheet } from '../components/features/PurificationSheet';
 import { SourceBadge } from '../components/features/SourceBadge';
@@ -17,7 +17,7 @@ import { useChat } from '../state/ChatContext';
 import type { DraftPreviewRequest, ReactionRequest } from '../types/features';
 
 export default function ChatScreen() {
-  const { messages, relationship, temperature, sending, sendMessage, settings, updateSettings, emotion, partnerEmotion, aiProvider, refreshEmotion, speaker, draft, setDraft, beginInteraction, interactionBusy, session, syncError, participantCount } = useChat();
+  const { messages, relationship, temperature, sending, sendMessage, settings, updateSettings, thermometers, aiProvider, speaker, draft, setDraft, beginInteraction, interactionBusy, session, syncError, participantCount } = useChat();
   const insets = useSafeAreaInsets();
   const [keyboardOpen, setKeyboardOpen] = useState(false);
   const [error, setError] = useState('');
@@ -97,7 +97,7 @@ export default function ChatScreen() {
           </>}
         </View>
         {syncError ? <Text style={[ui.error, { paddingHorizontal: 16 }]}>{syncError}</Text> : null}
-        {settings.thermometerEnabled && !keyboardOpen && <EmotionCard state={emotion} partner={partnerEmotion} onRetry={refreshEmotion} />}
+        {settings.thermometerEnabled && !keyboardOpen && <ThermometerCard thermometers={thermometers} viewer={session?.speaker ?? speaker} />}
         <ScrollView ref={scroll} style={{ flex: 1, minHeight: 0 }} contentContainerStyle={styles.messages} keyboardShouldPersistTaps="handled" keyboardDismissMode="interactive" onContentSizeChange={() => scroll.current?.scrollToEnd({ animated: true })}>
           {messages.length === 0 && <View style={styles.empty}><Text style={ui.label}>편하게 대화를 시작해보세요</Text><Text style={[ui.subtitle, { textAlign: 'center' }]}>전하고 싶은 말을 아래에 입력하세요.</Text></View>}
           {messages.map((message) => <MessageBubble key={message.id} message={message} viewer={session?.speaker ?? 'A'} />)}

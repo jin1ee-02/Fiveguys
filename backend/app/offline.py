@@ -1,6 +1,6 @@
 """Offline stand-in for the LLM: keyword rules so the whole pipeline runs before an API key is connected.
 
-It implements the same interface as OpenAIProvider (light / analyze / alternatives / emotion /
+It implements the same interface as OpenAIProvider (light / analyze / alternatives /
 reaction / structured), so nothing else changes when the real model is plugged in.
 The output is NOT an AI judgment. Every result is labelled `offline/rules-v1` and the UI says so.
 """
@@ -16,7 +16,6 @@ SARCASM = re.compile(r"대단하시네|대단하네요\^|잘났|퍽이나|참\s*
 BLAME = re.compile(r"맨날|항상|매번|넌\s*늘|한\s*번도|왜\s*(또|맨날)|너\s*때문|네\s*탓|니\s*탓|그딴")
 MILD = re.compile(r"또\s|지난번에도|이번에도|약속했잖아|하기로\s*했잖아")
 REPAIR = re.compile(r"미안|죄송|고마워|이해해|같이\s*.{0,8}(하자|해보자|할까)|내가\s*.{0,10}할게|괜찮아|다음엔|다음부터")
-UPSET = re.compile(r"답답|짜증|화나|화가|속상|열받|서운|지쳐|힘들")
 PRAISE = re.compile(r"대박|축하|최고|멋지|잘했")
 ACK = re.compile(r"^(ㅇㅇ|응|웅|네|넵|넹|ㅇㅋ|오키|ㅋ+|ㅎ+|ㅠ+|ㅜ+|알겠어|알았어|고마워|감사합니다|[\W_]+)[\s.!~]*$")
 TOPICS = ["청소", "설거지", "약속", "시간", "연락", "답장", "돈", "과제", "회의", "일정", "정리", "빨래"]
@@ -44,10 +43,8 @@ def score(text: str) -> dict:
     sarcasm = 0 if playful else 3 if SARCASM.search(text) else 0
     blame = 3 if BLAME.search(text) else 1 if MILD.search(text) else 0
     repair = 0 if sarcasm else 3 if len(REPAIR.findall(text)) > 1 else 2 if REPAIR.search(text) else 0
-    emotion = max(hostility, sarcasm - 1, blame - 1, 2 if UPSET.search(text) and not repair else 1 if UPSET.search(text) else 0)
-    emotion = min(4, emotion + (1 if sarcasm >= 2 and blame >= 2 else 0) + (1 if re.search(r"[!?]{2,}", text) and emotion else 0))
     harsh = max(hostility, sarcasm, blame)
-    return {"hostility": hostility, "sarcasm": sarcasm, "blame": blame, "repair": repair, "emotion": emotion,
+    return {"hostility": hostility, "sarcasm": sarcasm, "blame": blame, "repair": repair,
             "escalation_delta": 2 if harsh >= 4 else 1 if harsh >= 2 else -1 if repair >= 2 else 0}
 
 
@@ -77,10 +74,6 @@ class OfflineProvider:
 
     def alternatives(self, request):
         return rewrite(request.text, [t.text for t in request.recent_messages])
-
-    def emotion(self, request):
-        own = [score(t.text)["emotion"] for t in request.recent_messages if t.speaker == request.speaker]
-        return float(own[-1]), float(own[-2]) if len(own) > 1 else None, 0.75, LABEL
 
     def reaction(self, request):
         values = score(request.text)

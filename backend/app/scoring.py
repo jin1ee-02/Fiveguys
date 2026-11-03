@@ -35,22 +35,4 @@ def draft_decision(features: FeatureScores, risk: float, temperature: float) -> 
     return "rewrite_suggested" if risk >= rewrite_threshold(temperature) else "below_threshold"
 
 
-LEVEL_ADVICE = ["차분하게 원하는 점을 이야기해보세요.", "불편했던 점을 구체적으로 정리해보세요.", "잠깐 쉬면서 원하는 점을 정리해보세요.", "답장을 잠시 미루고 충분히 쉬어보세요.", "대화를 잠시 멈추고 진정한 뒤 이어가보세요."]
 RELATIONSHIP_OFFSET = {"직장 동료": -10, "연인": -5, "룸메이트": -5, "친구": 0}
-
-
-def thermometer(messages: list[dict], speaker: str) -> dict:
-    """Thermometer for one speaker from the Light results already stored with each message: no extra model call."""
-    own = [m["result"]["data"]["features"] for m in messages[-10:] if m["speaker"] == speaker]
-    own = [f for f in own if f.get("emotion") is not None]
-    base = {"subject": speaker, "contextCount": len(messages[-10:])}
-    if not own:
-        return {**base, "status": "insufficient_context", "level": None, "trend": None, "confidence": None, "provider": "core-state", "recommendation": "메시지가 아직 없어 감정을 판단할 수 없어요."}
-    current = own[-1]
-    provider = current.get("model_version") or "core-state"
-    if current["confidence"] <= 1:
-        return {**base, "status": "uncertain", "level": None, "trend": None, "confidence": current["confidence"] / 4, "provider": provider, "recommendation": "표현과 문맥이 애매해 감정 단계를 보류했어요."}
-    change = current["emotion"] - own[-2]["emotion"] if len(own) > 1 else None
-    trend = None if change is None else "up" if change >= 1 else "down" if change <= -1 else "flat"
-    level = current["emotion"] + 1
-    return {**base, "status": "ok", "level": level, "trend": trend, "confidence": current["confidence"] / 4, "provider": provider, "recommendation": LEVEL_ADVICE[level - 1]}

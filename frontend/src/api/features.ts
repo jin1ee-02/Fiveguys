@@ -1,5 +1,5 @@
-import { mockDraftReview, mockEmotion, mockVerdict } from '../mocks/features';
-import type { DraftPreviewRequest, DraftReview, EmotionRequest, EmotionResult, ReactionRequest, ReactionResult, VerdictRequest, VerdictResult } from '../types/features';
+import { mockDraftReview, mockVerdict } from '../mocks/features';
+import type { DraftPreviewRequest, DraftReview, ReactionRequest, ReactionResult, VerdictRequest, VerdictResult } from '../types/features';
 import type { FeatureScores } from '../types/api';
 import { newRequestId, requestJson } from './client';
 
@@ -42,16 +42,6 @@ export async function reviewDraft(input: DraftPreviewRequest, signal?: AbortSign
     provider: result.features.model_version,
     source: 'api',
   };
-}
-
-export async function analyzeMyEmotion(input: EmotionRequest, signal?: AbortSignal): Promise<EmotionResult> {
-  if (FEATURE_SOURCE === 'mock') {
-    await previewDelay(250, signal);
-    return mockEmotion(input);
-  }
-  const result = await requestJson<Omit<EmotionResult, 'source'>>('/v1/emotions/analyze', input, { signal });
-  if (result.subject !== input.speaker || (result.level !== null && ![1, 2, 3, 4, 5].includes(result.level)) || (result.trend !== null && !['up', 'flat', 'down'].includes(result.trend)) || typeof result.recommendation !== 'string' || !Number.isInteger(result.contextCount) || result.contextCount < 0 || !['ok', 'uncertain', 'insufficient_context'].includes(result.status ?? '')) throw new Error('나의 감정 응답 형식을 확인해주세요.');
-  return { ...result, source: 'api' };
 }
 
 function validateVerdict(result: Omit<VerdictResult, 'source'>): VerdictResult {

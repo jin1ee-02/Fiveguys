@@ -23,7 +23,6 @@ export interface FeatureScores {
   blame: number;
   repair: number;
   escalation_delta: number;
-  emotion?: number | null;
   confidence: number;
   rationale: string;
   model_version?: string | null;

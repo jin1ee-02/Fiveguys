@@ -15,7 +15,6 @@ from pathlib import Path
 from fastapi import HTTPException
 
 from app.schemas import RoomSettings
-from app.scoring import thermometer
 
 
 def now():
@@ -116,9 +115,7 @@ class Store:
         messages = [self.message(row) for row in reversed(rows)]
         # Rooms saved before a setting was removed (e.g. sensitivity) keep only the settings that still exist.
         settings = RoomSettings.model_validate({k: v for k, v in json.loads(settings[0]).items() if k in RoomSettings.model_fields}).model_dump()
-        # Both thermometers come from the stored Light results, so reading the room costs no model call.
-        emotions = {who: thermometer(messages, who) for who in "AB"}
-        return {"roomId": room_id, "relationship": room["relationship"], "version": room["version"], "temperature": room["temperature"], "messages": messages, "settings": settings, "participantCount": count, "emotions": emotions}
+        return {"roomId": room_id, "relationship": room["relationship"], "version": room["version"], "temperature": room["temperature"], "messages": messages, "settings": settings, "participantCount": count}
 
     def update(self, room_id, speaker, request):
         with self.connect() as db:

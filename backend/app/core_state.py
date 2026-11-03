@@ -40,7 +40,7 @@ def build(provider, messages, relationship, previous=None, context=""):
 
 
 def light_view(core):
-    """What Light gets: who wants what and what the dispute is about. Facts and the emotion trajectory stay with Heavy."""
+    """What Light gets: who wants what and what the dispute is about. Facts and the conflict trajectory stay with Heavy."""
     if not core:
         return None
     return {"issues": core["issues"], "position_a": core["position_a"], "position_b": core["position_b"], "background": core["background"]}

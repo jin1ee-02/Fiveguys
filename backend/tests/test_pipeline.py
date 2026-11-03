@@ -69,13 +69,13 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200, response.text)
         return response.json()
 
-    def test_light_call_returns_signals_emotion_and_three_alternatives(self):
+    def test_light_call_returns_signals_and_three_alternatives(self):
         response = self.client.post("/v1/drafts/analyze", json={"speaker": "A", "text": "진짜 대단하시네 ㅋㅋ 맨날 그 모양이지", "relationship": "룸메이트", "previous_temperature": 30, "suggest_rewrite": False})
         body = response.json()
         self.assertEqual(body["decision"], "rewrite_suggested")
         self.assertEqual(len(body["alternatives"]), 3)
         self.assertGreaterEqual(body["features"]["sarcasm"], 3)
-        self.assertIsNotNone(body["features"]["emotion"])
+        self.assertNotIn("emotion", body["features"])
 
     def test_calm_draft_gets_no_alternatives(self):
         body = self.client.post("/v1/drafts/analyze", json={"speaker": "A", "text": "오늘 같이 청소할래?", "previous_temperature": 0}).json()
@@ -92,14 +92,13 @@ class PipelineTests(unittest.TestCase):
         with self.assertRaises(AssertionError):
             light_analysis(ConversationInput(speaker="A", text="ㅇㅇ", previous_temperature=70), Untouchable())
 
-    def test_room_state_carries_both_thermometers_without_extra_calls(self):
+    def test_room_state_carries_the_shared_temperature_the_thermometer_shows(self):
         state = self.chat(SCENARIO + [("A", "진짜 대단하시네 ㅋㅋ 맨날 그 모양이지")])
-        mine, partner = state["emotions"]["A"], state["emotions"]["B"]
-        self.assertEqual(mine["status"], "ok")
-        self.assertGreaterEqual(mine["level"], 3)
-        self.assertEqual(mine["trend"], "up")
-        self.assertLessEqual(partner["level"], 2)
-        self.assertGreater(state["temperature"], 0)
+        self.assertNotIn("emotions", state)
+        last = state["messages"][-1]["result"]["data"]
+        # One temperature for the room: the last message moved it up, and its stored result says from where.
+        self.assertEqual(last["temperature"], state["temperature"])
+        self.assertGreater(last["temperature"], last["previous_temperature"])
 
     def test_core_state_follows_each_message_and_reaches_light_requests(self):
         self.chat(SCENARIO[:2])

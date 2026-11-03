@@ -4,8 +4,9 @@ const { test } = require('node:test');
 process.env.EXPO_PUBLIC_API_MODE = 'local';
 process.env.EXPO_PUBLIC_FEATURE_MODE = 'mock';
 const { deliverMessage } = require('../.test-build/api/client');
-const { analyzeMyEmotion, reviewDraft, requestVerdict } = require('../.test-build/api/features');
-const { DEMO_DRAFT, mockDraftReview, mockEmotion } = require('../.test-build/mocks/features');
+const { reviewDraft, requestVerdict } = require('../.test-build/api/features');
+const { personalThermometer, roomThermometers, thermometerLevel } = require('../.test-build/api/thermometer');
+const { DEMO_DRAFT, mockDraftReview, mockThermometers } = require('../.test-build/mocks/features');
 const input = { speaker: 'A', text: DEMO_DRAFT, relationship: '룸메이트', recent_messages: [], previous_temperature: 0 };
 
 test('local + mock 기능은 서버 연결 없이 체험된다', async () => {
@@ -17,29 +18,33 @@ test('local + mock 기능은 서버 연결 없이 체험된다', async () => {
     assert.equal(review.source, 'mock');
     assert.equal(review.decision, 'suggested');
     assert.equal(review.alternatives.length, 3);
-    const emotion = await analyzeMyEmotion({ speaker: 'A', relationship: '친구', recent_messages: [{ speaker: 'A', text: '함께 해결해보자' }] });
-    assert.equal(emotion.subject, 'A');
-    assert.equal(emotion.source, 'mock');
+    const { mine, partner } = mockThermometers([{ speaker: 'A', text: '함께 해결해보자' }], 'A');
+    assert.equal(mine.source, 'mock');
+    assert.equal(mine.trend, null);
+    assert.equal(partner, null);
   } finally { global.fetch = previousFetch; }
 });
 
-test('상대의 공격적 발화를 나의 감정 점수로 표시하지 않는다', () => {
-  const base = { speaker: 'A', relationship: '친구' };
-  const own = { speaker: 'A', text: '함께 해결해보자' };
-  const before = mockEmotion({ ...base, recent_messages: [own] });
-  const after = mockEmotion({ ...base, recent_messages: [own, { speaker: 'B', text: '닥쳐' }] });
-  assert.equal(after.subject, 'A');
-  assert.equal(after.level, before.level);
-  assert.equal(after.trend, 'flat');
-  assert.equal(after.contextCount, 2);
+test('감정 온도계는 사람마다 자기 메시지만 반영한다', () => {
+  const calm = { speaker: 'A', text: '함께 해결해보자' };
+  const before = mockThermometers([calm], 'A');
+  const after = mockThermometers([calm, { speaker: 'B', text: '닥쳐' }], 'A');
+  assert.deepEqual(after.mine, before.mine);
+  assert.equal(after.partner.subject, 'B');
+  assert.ok(after.partner.temperature > after.mine.temperature);
+  assert.deepEqual(mockThermometers([], 'A'), { mine: null, partner: null });
 });
 
-test('나의 감정 변화는 나의 발화끼리 비교한다', () => {
-  const result = mockEmotion({ speaker: 'A', relationship: '친구', recent_messages: [
-    { speaker: 'A', text: '답답해' }, { speaker: 'B', text: '닥쳐' }, { speaker: 'A', text: '함께 해보자' },
-  ] });
-  assert.equal(result.level, 1);
-  assert.equal(result.trend, 'down');
+test('감정 온도는 갈등 온도와 같은 가중 누적이라 한 메시지로 확 튀지 않는다', () => {
+  assert.deepEqual([0, 19.9, 20, 45, 60, 80, 100].map(thermometerLevel), [1, 1, 2, 3, 4, 5, 5]);
+  const once = personalThermometer('A', [100], 'api');
+  assert.deepEqual([once.temperature, once.level, once.trend], [30, 2, null]);
+  const calmer = personalThermometer('A', [100, 0], 'api');
+  assert.deepEqual([calmer.temperature, calmer.trend, calmer.messageCount], [21, 'down', 2]);
+  const message = (speaker, raw) => ({ id: 'm', createdAt: '', speaker, text: 't', result: { mode: 'ai', data: { features: { model_version: 'openai/gpt-4o-mini' }, raw_conflict: raw, previous_temperature: 0, temperature: 0 } } });
+  const room = roomThermometers([message('A', 100), message('B', 0), message('A', 0)], 'B');
+  assert.deepEqual([room.mine.subject, room.mine.temperature, room.partner.subject, room.partner.temperature, room.partner.provider], ['B', 0, 'A', 21, 'openai/gpt-4o-mini']);
+  assert.deepEqual(roomThermometers([{ ...message('A', 50), result: { mode: 'local' } }], 'A'), { mine: null, partner: null });
 });
 
 test('순화 확인은 일반 문장에 대안을 강제하지 않는다', () => {

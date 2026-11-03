@@ -1,7 +1,8 @@
-import type { ChatTurn } from '../types/api';
-import type { DraftPreviewRequest, DraftReview, EmotionLevel, EmotionRequest, EmotionResult, VerdictRequest, VerdictResult } from '../types/features';
+import { personalThermometer } from '../api/thermometer';
+import type { ChatTurn, Speaker } from '../types/api';
+import type { DraftPreviewRequest, DraftReview, Thermometers, VerdictRequest, VerdictResult } from '../types/features';
 
-// Fixtures for frontend interaction previews. These are not emotion/AI models.
+// Fixtures for frontend interaction previews. These are not AI models.
 const sharp = /그딴|맨날|항상\s*그|다\s*네\s*탓|너\s*때문|멍청|바보|닥쳐|꺼져|대단하시네|미친놈/;
 const boundary = /닥쳐|꺼져|말하지\s*마/;
 const repair = /미안|함께|같이\s*하|이해해|괜찮아/;
@@ -28,26 +29,19 @@ export function mockDraftReview(input: DraftPreviewRequest): DraftReview {
   };
 }
 
-function previewLevel(text: string): EmotionLevel {
-  if (/닥쳐|꺼져|미친놈/.test(text)) return 5;
-  if (sharp.test(text)) return 4;
-  if (/답답|짜증|화가|늦네|속상/.test(text)) return 3;
-  if (repair.test(text)) return 1;
-  return 2;
+// Keyword stand-in for one message's conflict score (0-100); not a model.
+function previewConflict(text: string): number {
+  if (/닥쳐|꺼져|미친놈/.test(text)) return 95;
+  if (sharp.test(text)) return 70;
+  if (/답답|짜증|화가|늦네|속상/.test(text)) return 45;
+  if (repair.test(text)) return 0;
+  return 20;
 }
 
-export function mockEmotion(input: EmotionRequest): EmotionResult {
-  const own = input.recent_messages.filter((turn) => turn.speaker === input.speaker);
-  const level = own.length ? previewLevel(own[own.length - 1].text) : 1;
-  const previous = own.length > 1 ? previewLevel(own[own.length - 2].text) : level;
-  return {
-    subject: input.speaker,
-    level,
-    trend: level > previous ? 'up' : level < previous ? 'down' : 'flat',
-    recommendation: level >= 3 ? '내가 원하는 점을 먼저 정리하고, 잠깐 쉬었다 이야기해보세요.' : '지금처럼 구체적인 상황과 원하는 점을 차분히 이야기해보세요.',
-    contextCount: input.recent_messages.length,
-    source: 'mock',
-  };
+/** Both thermometers for the offline preview, each from that person's own messages. */
+export function mockThermometers(messages: ChatTurn[], viewer: Speaker): Thermometers {
+  const of = (who: Speaker) => personalThermometer(who, messages.filter((m) => m.speaker === who).map((m) => previewConflict(m.text)), 'mock');
+  return { mine: of(viewer), partner: of(viewer === 'A' ? 'B' : 'A') };
 }
 
 export function mockVerdict(input: VerdictRequest): VerdictResult {

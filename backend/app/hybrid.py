@@ -23,7 +23,6 @@ def combine(llm: FeatureScores, jev: FeatureScores) -> FeatureScores:
     scores = {key: mean(key) for key in SIGNALS}
     delta = (llm.escalation_delta + jev.escalation_delta) / 2
     scores["escalation_delta"] = int(delta + 0.5) if delta >= 0 else -int(-delta + 0.5)
-    scores["emotion"] = mean("emotion") if llm.emotion is not None and jev.emotion is not None else llm.emotion
     # Disagreement lowers confidence to the "hold back" gate; otherwise the more cautious rater decides.
     confidence = 1 if gap >= DISAGREEMENT else min(llm.confidence, jev.confidence)
     note = " (두 모델의 판단이 엇갈려 보류했어요.)" if gap >= DISAGREEMENT else ""
@@ -59,9 +58,6 @@ class HybridAnalyzer:
 
     def alternatives(self, request):
         return self.llm.alternatives(request)
-
-    def emotion(self, request):
-        return self.jev.emotion(request)
 
     def reaction(self, request):
         return self.jev.reaction(request)

@@ -163,8 +163,8 @@ def twice(operation):
 
 
 def trajectory(messages):
-    """Emotion trajectory of the Core State, read from the Light results stored with each message."""
-    return [{"index": i, "speaker": m["speaker"], "emotion": m["result"]["data"]["features"].get("emotion"), "conflict": m["result"]["data"]["raw_conflict"]} for i, m in enumerate(messages)]
+    """Conflict trajectory of the Core State: each message's conflict score, read from the stored Light results."""
+    return [{"index": i, "speaker": m["speaker"], "conflict": m["result"]["data"]["raw_conflict"]} for i, m in enumerate(messages)]
 
 
 def build_core_state(request, snapshot, provider, previous=None):

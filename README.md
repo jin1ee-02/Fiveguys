@@ -55,7 +55,7 @@ TYPESAFE_API_KEY=...         # 선택. 넣으면 LLM + JEV 하이브리드 분�
 
 ```bash
 cd backend
-python -m unittest discover -s tests     # 47개 통과
+python -m unittest discover -s tests     # 46개 통과
 cd ../frontend
 npx tsc --noEmit && npx expo lint && npm test   # 타입, 린트, 단위 테스트 5개 통과
 ```

@@ -18,9 +18,9 @@ from pydantic import ValidationError
 
 from app.provider import ModelOutputError, OpenAIProvider, configured, get_provider, get_generation_factory, llm_mode
 from app.prompts import MEDIATOR_PROMPT
-from app.schemas import MediationOutput, MediationResult, ConversationInput, DraftInput, DraftResult, EmotionInput, EmotionResult, MessageResult, ReactionInput, ReactionResult, ReceiptResult, RoomCreate, RoomJoin, RoomUpdate, SendInput, VerdictInput, VerdictResult
+from app.schemas import MediationOutput, MediationResult, ConversationInput, DraftInput, DraftResult, MessageResult, ReactionInput, ReactionResult, ReceiptResult, RoomCreate, RoomJoin, RoomUpdate, SendInput, VerdictInput, VerdictResult
 from app.scoring import RELATIONSHIP_OFFSET, conflict_score, rewrite_threshold, update_temperature
-from app.analysis import analysis_mode, analyzer_name, emotion_result, get_analyzer, light_analysis, reaction_result
+from app.analysis import analysis_mode, analyzer_name, get_analyzer, light_analysis, reaction_result
 from app import core_state
 from app.store import get_store, room_lock
 from app.verdict import create_verdict
@@ -185,11 +185,6 @@ def analyze_draft(request: DraftInput, provider: Analyzer, generation: Generatio
 
 def relationship_offset(relationship):
     return RELATIONSHIP_OFFSET.get(relationship, 0)
-
-
-@app.post("/v1/emotions/analyze", response_model=EmotionResult)
-def analyze_emotion(request: EmotionInput, provider: Analyzer):
-    return emotion_result(request, provider)
 
 
 @app.post("/v1/reactions/preview", response_model=ReactionResult)

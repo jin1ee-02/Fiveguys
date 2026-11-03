@@ -8,12 +8,12 @@ from unittest.mock import patch
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from app.analysis import emotion_result, get_analyzer
+from app.analysis import get_analyzer
 from app.jev import score_answer
 from app.main import app
 from app.offline import OfflineProvider
 from app.provider import ModelOutputError, get_generation_factory
-from app.schemas import DebateOutput, DebatePoint, EmotionInput, FeatureScores, JudgeOutput, SideScore, VerdictInput
+from app.schemas import DebateOutput, DebatePoint, FeatureScores, JudgeOutput, SideScore, TrajectoryPoint, VerdictInput
 from app.store import Store
 from app.verdict import run_debate
 
@@ -27,9 +27,6 @@ class FakeAnalyzer:
     def analyze(self, request):
         self.calls += 1
         return FeatureScores(hostility=0, sarcasm=0, blame=0, repair=0, escalation_delta=0, confidence=4, rationale="차분한 표현")
-
-    def emotion(self, request):
-        return 2, None, 0.95, self.model
 
 
 class FakeDebate:
@@ -94,18 +91,9 @@ class MvpTests(unittest.TestCase):
         reopened = Store(self.store.path)
         self.assertEqual(reopened.state(a["roomId"], "A")["relationship"], "룸메이트")
 
-    def test_no_target_turn_is_not_calm_or_flat(self):
-        request = EmotionInput(speaker="A", recent_messages=[{"speaker": "B", "text": "안녕"}])
-        result = emotion_result(request, self.analyzer)
-        self.assertEqual(result.status, "insufficient_context")
-        self.assertIsNone(result.level)
-        self.assertIsNone(result.trend)
-
-    def test_one_target_turn_has_no_comparable_trend(self):
-        request = EmotionInput(speaker="A", recent_messages=[{"speaker": "A", "text": "답답해"}])
-        result = emotion_result(request, self.analyzer)
-        self.assertEqual(result.level, 3)
-        self.assertIsNone(result.trend)
+    def test_verdicts_saved_with_an_emotion_trajectory_still_open(self):
+        point = TrajectoryPoint.model_validate({"index": 0, "speaker": "A", "emotion": 2, "conflict": 40.0})
+        self.assertEqual(point.model_dump(), {"index": 0, "speaker": "A", "conflict": 40.0})
 
     def test_score_rejects_inconsistent_probability_weighted_mean(self):
         answer = {"type": "score", "score": 4, "confidence": 1, "probabilities": {str(i): float(i == 0) for i in range(5)}, "legend": {str(i): str(i) for i in range(5)}}
