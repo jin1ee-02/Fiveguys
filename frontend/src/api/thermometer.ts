@@ -1,10 +1,11 @@
 import type { Message, Speaker } from '../types/api';
 import type { FeatureSource, Thermometer, ThermometerLevel, Thermometers } from '../types/features';
 
-// Each person's thermometer runs the room temperature's formula (0.7 old + 0.3 new, backend/app/scoring.py)
-// over that person's own messages only. Its 40 / 60 / 80 bands are where the rewrite threshold tightens.
+// Each person's thermometer accumulates the conflict scores of that person's own messages, like the room temperature
+// (backend/app/scoring.py) but half old + half new instead of 0.7 + 0.3, so it follows the latest message faster.
+// The room temperature keeps 0.7 / 0.3. The 40 / 60 / 80 bands are where the rewrite threshold tightens.
 export const THERMOMETER_STAGES = ['평온', '주의', '경고', '위험', '폭발'] as const;
-const ALPHA = 0.3;
+const ALPHA = 0.5;
 const ADVICE = [
   '차분하게 원하는 점을 이야기해보세요.',
   '불편했던 점을 구체적으로 정리해보세요.',
