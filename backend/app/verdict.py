@@ -66,8 +66,47 @@ def aggregate(judgments):
             setattr(getattr(chair, name), key + "Reason", getattr(getattr(nearest, name), key + "Reason"))
             setattr(getattr(chair, name), key, average)
     chair.belief = round(belief, 3)
+    # The verdict: average the two responsibility splits; its words come from the judge whose split is closest.
+    cause, conduct = (round(sum(getattr(j, key) for j in judgments) / len(judgments), 1) for key in ("causeA", "conductA"))
+    speaker = min(judgments, key=lambda j: abs(j.causeA - cause) + abs(j.conductA - conduct))
+    for key in ("keyMoments", "causeReason", "conductReason", "conclusion"):
+        setattr(chair, key, getattr(speaker, key))
+    chair.causeA, chair.conductA = cause, conduct
     chair.unresolved = sum(j.unresolved for j in judgments) * 2 > len(judgments)
     return chair
+
+
+def fallback_conclusion(cause, conduct):
+    share = (cause + conduct) / 2
+    if 40 <= share <= 60:
+        return "책임이 비슷합니다. 두 사람 모두 돌아볼 점이 있어요."
+    return f"이번 다툼은 {'A' if share > 60 else 'B'} 쪽 책임이 더 큽니다."
+
+
+def check_conclusion(judgment, messages):
+    """Holds the verdict fields to the conversation: shares in range, deciding messages that exist,
+    quotes that really are in that message, and the speaker taken from the message, not from the model."""
+    for key in ("causeA", "conductA"):
+        value = getattr(judgment, key)
+        if not math.isfinite(value):
+            raise ModelOutputError("책임 비율이 유효하지 않습니다.")
+        setattr(judgment, key, round(max(0.0, min(100.0, value)), 1))
+    if any(len(text) > 300 for text in (judgment.causeReason, judgment.conductReason, judgment.conclusion)):
+        raise ModelOutputError("판결 결론이 너무 깁니다.")
+    moments, seen = [], set()
+    for moment in judgment.keyMoments:
+        if not 0 <= moment.index < len(messages) or moment.index in seen or not moment.why.strip() or len(moment.why) > 200:
+            continue
+        seen.add(moment.index)
+        text = messages[moment.index]["text"]
+        quote = moment.quote.strip().strip("'\"‘’“”")
+        moment.quote = quote if quote and quote in text else text[:40]
+        moment.speaker = messages[moment.index]["speaker"]
+        moments.append(moment)
+    judgment.keyMoments = sorted(moments[:3], key=lambda m: m.index)
+    if not judgment.conclusion.strip():
+        judgment.conclusion = fallback_conclusion(judgment.causeA, judgment.conductA)
+    return judgment
 
 
 def score_vector(judgment):
@@ -97,6 +136,7 @@ def validate_judge(judgment, mode):
     return judgment
 
 
+VERDICT_WINDOW = 30  # messages a verdict reads; the request may carry no more (schemas.VerdictInput)
 SHIFT_LIMIT = 15  # how far the debate may take one judge's item from its pre-debate score
 UNAPPLIED = " (점수 변화와 방향이 달라 반영하지 않음)"
 REPEATED = " (같은 방향으로 이미 반영해 다시 반영하지 않음)"
@@ -231,6 +271,7 @@ class JudgeAgent:
         def call():
             judgment = self.provider.structured(JUDGE_PROMPT, turn, JudgeOutput, 3000, shared=case)
             # Points first: the lean is then turned to match the scores as they stand after reverts and limits.
+            judgment = check_conclusion(judgment, case["case"]["messages"])
             return validate_judge(check_points(judgment, self.previous, spoken, count, self.initial, self.applied), mode)
         judgment = twice(call)
         if self.previous is None:
@@ -295,8 +336,10 @@ class Moderator:
                 panel = {agent.persona: agent.previous for agent in self.judges}
                 calls += len(self.debaters) + len(self.judges)
                 # Adaptive stopping (Adaptive Stability Detection): stop when the distribution of judgments stopped moving.
+                # The judges' own "unresolved" flag is not a condition: gpt-6-luna kept it on in every round of every
+                # verdict while no score moved, so every verdict ran 3 rounds (21 calls, about 100 s) for nothing.
                 last = trace[-1]
-                stable = not judgment.unresolved and not previous.unresolved and last.scoreDelta <= score_limit and last.beliefDelta <= belief_limit and last.ksDelta <= ks_limit
+                stable = last.scoreDelta <= score_limit and last.beliefDelta <= belief_limit and last.ksDelta <= ks_limit
                 if stable:
                     break
                 previous = judgment
@@ -338,7 +381,7 @@ def create_verdict(request, authorization, store, provider):
             raise HTTPException(409, "같은 요청 ID를 다른 판결에 사용할 수 없습니다.")
         return VerdictResult.model_validate_json(existing["result"])
     state = store.state(request.room_id, subject)
-    recent = state["messages"][-10:]
+    recent = state["messages"][-VERDICT_WINDOW:]
     messages = [{"speaker": m["speaker"], "text": m["text"]} for m in recent]
     if set(m["speaker"] for m in messages) != {"A", "B"}:
         raise HTTPException(422, "양쪽의 메시지가 한 개 이상 필요합니다.")
@@ -352,6 +395,10 @@ def create_verdict(request, authorization, store, provider):
     if stored:
         stored = {key: value for key, value in stored.items() if key != "trajectory"}  # rows saved by older versions carry one
     if stored and version == state["version"]:
+        # The room's Core State numbers its evidence within the last core_state.WINDOW messages; the verdict sees more.
+        offset = len(messages) - min(core_state.WINDOW, len(messages))
+        for fact in stored.get("facts", []):
+            fact["evidence_indices"] = [i + offset for i in fact["evidence_indices"]]
         core = CoreState(**stored, trajectory=snapshot["trajectory"])
     else:
         core = build_core_state(request, snapshot, provider, stored)

@@ -160,9 +160,10 @@ def analyze_draft(request: DraftInput, provider: Analyzer, generation: Generatio
         features, alternatives = light_analysis(request, provider)
         risk = conflict_score(features)
         threshold = rewrite_threshold(request.previous_temperature) + relationship_offset(request.relationship)
-        # One unmistakable signal (3+ = clear sarcasm / direct attack / strong blame) is enough even in a calm room,
-        # otherwise the weighted sum can never reach the calm-room threshold.
-        strong = max(features.hostility, features.sarcasm, features.blame) >= 3
+        # A direct attack or clear sarcasm (3+) is enough even in a calm room. Blame alone is not: a factual complaint
+        # such as "이번이 세 번째야. 지난주도 그 전주도 너 당일에 취소했잖아" scores blame 3, and its alternatives came
+        # back nearly identical to the draft. Strong blame still counts through the score.
+        strong = max(features.hostility, features.sarcasm) >= 3
         decision = "low_confidence" if features.confidence <= 1 else "rewrite_suggested" if risk >= threshold or strong else "below_threshold"
         if decision != "rewrite_suggested" and not request.force_rewrite:
             alternatives = []

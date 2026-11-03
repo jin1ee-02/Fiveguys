@@ -35,15 +35,18 @@ test('감정 온도계는 사람마다 자기 메시지만 반영한다', () => 
   assert.deepEqual(mockThermometers([], 'A'), { mine: null, partner: null });
 });
 
-test('감정 온도는 내 메시지 점수를 반씩 누적해 한 메시지로 최고 단계까지 튀지 않는다', () => {
+test('감정 온도는 거친 메시지에 빨리 오르고 차분한 메시지에 천천히 식는다', () => {
   assert.deepEqual([0, 19.9, 20, 45, 60, 80, 100].map(thermometerLevel), [1, 1, 2, 3, 4, 5, 5]);
   const once = personalThermometer('A', [100], 'api');
-  assert.deepEqual([once.temperature, once.level, once.trend], [50, 3, null]);
+  assert.deepEqual([once.temperature, once.level, once.trend], [80, 5, null]);
   const calmer = personalThermometer('A', [100, 0], 'api');
-  assert.deepEqual([calmer.temperature, calmer.trend, calmer.messageCount], [25, 'down', 2]);
+  assert.deepEqual([calmer.temperature, calmer.trend, calmer.messageCount], [48, 'down', 2]);
+  // A quarrel's peak stays at the top stage when the next insult scores a little lower than the last one.
+  const peak = personalThermometer('B', [16, 52, 88, 100, 72], 'api');
+  assert.deepEqual([peak.level, peak.trend], [5, 'down']);
   const message = (speaker, raw) => ({ id: 'm', createdAt: '', speaker, text: 't', result: { mode: 'ai', data: { features: { model_version: 'openai/gpt-4o-mini' }, raw_conflict: raw, previous_temperature: 0, temperature: 0 } } });
   const room = roomThermometers([message('A', 100), message('B', 0), message('A', 0)], 'B');
-  assert.deepEqual([room.mine.subject, room.mine.temperature, room.partner.subject, room.partner.temperature, room.partner.provider], ['B', 0, 'A', 25, 'openai/gpt-4o-mini']);
+  assert.deepEqual([room.mine.subject, room.mine.temperature, room.partner.subject, room.partner.temperature, room.partner.provider], ['B', 0, 'A', 48, 'openai/gpt-4o-mini']);
   assert.deepEqual(roomThermometers([{ ...message('A', 50), result: { mode: 'local' } }], 'A'), { mine: null, partner: null });
 });
 

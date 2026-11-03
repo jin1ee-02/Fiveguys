@@ -7,7 +7,7 @@ The output is NOT an AI judgment. Every result is labelled `offline/rules-v1` an
 
 import re
 
-from app.schemas import CoreStateOutput, DebateOutput, DebatePoint, FactItem, FeatureScores, JudgeOutput, LightOutput, MediationOutput, SideScore
+from app.schemas import CoreStateOutput, DebateOutput, DebatePoint, FactItem, FeatureScores, JudgeOutput, KeyMoment, LightOutput, MediationOutput, SideScore
 
 LABEL = "offline/rules-v1"
 INSULT = re.compile(r"닥쳐|꺼져|병신|멍청|바보|미친|죽을래|재수\s*없|한심")
@@ -137,7 +137,17 @@ class OfflineProvider:
                                   accepted=bool(o["evidence_indices"]), direction="none",
                                   reason="규칙 기반 예시: 근거 메시지 번호가 있는 논점만 확인으로 표시하고 점수는 바꾸지 않아요." if o["evidence_indices"] else "규칙 기반 예시: 근거 메시지 번호가 없어 채택하지 않았어요.")
                       for o in payload.get("opinions", [])]
+            # Rules can see who spoke more harshly, not who caused the problem: the cause stays even.
+            harsh = {s: sum(x["hostility"] + x["sarcasm"] + x["blame"] for x in stats[s]) for s in "AB"}
+            conduct = round(100 * harsh["A"] / (harsh["A"] + harsh["B"]), 1) if harsh["A"] + harsh["B"] else 50.0
+            ranked = sorted(range(len(messages)), key=lambda i: -sum(score(messages[i]["text"])[k] for k in ("hostility", "sarcasm", "blame")))
+            moments = [KeyMoment(index=i, quote=messages[i]["text"][:40], effect="worsened", why="규칙 기반 예시: 날카로운 표현이 가장 많이 감지된 메시지예요.")
+                       for i in ranked[:1] if sum(score(messages[i]["text"])[k] for k in ("hostility", "sarcasm", "blame"))]
+            leader = "비슷합니다" if 40 <= (50 + conduct) / 2 <= 60 else f"{'A' if conduct > 50 else 'B'} 쪽이 더 큽니다"
             return JudgeOutput(debatePoints=points, plaintiff=a, defendant=b, unresolved=False, belief=belief,
+                               keyMoments=moments, causeA=50, causeReason="규칙 기반 예시: 규칙으로는 누가 문제를 일으켰는지 판단할 수 없어 반반으로 두었어요.",
+                               conductA=conduct, conductReason="규칙 기반 예시: 각자 메시지에서 감지된 날카로운 표현의 양으로 나눴어요.",
+                               conclusion=f"규칙 기반 예시: 다투는 방식의 책임은 {leader}. 원인 책임은 규칙으로 판단하지 않았어요.",
                                summary=f"{josa(topic, '을', '를')} 둘러싼 갈등입니다. 약속의 중요성을 말한 쪽과 사정을 설명한 쪽 모두 이해할 수 있는 지점이 있고, 표현 방식에서 감정이 커졌습니다.",
                                recommendation=f"{josa(topic, '을', '를')} 언제 누가 할지 구체적으로 정하고, 지키기 어려우면 먼저 알려주기로 약속해보세요.",
                                humor=f"오늘의 메인 이벤트는 {topic}! 링 위의 말싸움은 잠시 내려놓고 태그팀으로 해결해볼까요?" if case.get("mode") == "WWE" else "")

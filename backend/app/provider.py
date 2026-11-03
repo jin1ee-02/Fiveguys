@@ -8,6 +8,7 @@ and return it from get_provider. Until then app.offline.OfflineProvider stands i
 
 import json
 import os
+import re
 import time
 from functools import lru_cache
 from pathlib import Path
@@ -20,6 +21,14 @@ from app.prompts import LIGHT_PROMPT, REWRITE_PROMPT, ALTERNATIVES_PROMPT, REACT
 from app.schemas import AlternativesOutput, ConversationInput, FeatureScores, LightOutput, ReactionOutput, RewriteOutput
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+
+
+# Words a rewrite must not keep: swearing, insults, threats and ultimatums (see "바꿀 것" in ALTERNATIVES_PROMPT).
+HARSH = re.compile(r"씨발|시발|ㅅㅂ|ㅆㅂ|개새|병신|닥쳐|꺼져|미친(놈|년|새)|쓰레기|죽을래|차단(할|한다|해|하겠)|나가서\s*살|생각이\s*있(긴|기는)|그\s*모양이|팀장님\s*앞에서도")
+
+
+def harsh(text: str) -> bool:
+    return bool(HARSH.search(text))
 
 
 class ModelOutputError(Exception):
@@ -66,11 +75,21 @@ class OpenAIProvider:
         return response.output_parsed
 
     def alternatives(self, request):
-        result = self.structured(ALTERNATIVES_PROMPT, json.loads(self._payload(request)), AlternativesOutput, 700)
-        alternatives = [value.strip() for value in result.alternatives]
-        if len(alternatives) != 3 or len(set(alternatives)) != 3 or any(not value or len(value) > 2000 or value == request.text.strip() for value in alternatives):
-            raise ModelOutputError("순화 대안 3개가 유효하지 않습니다.")
-        return alternatives
+        """Three rewrites. One that keeps an insult, threat or ultimatum is asked for once more, then dropped:
+        gpt-6-luna kept "네가 나가서 살아" in all three rewrites of "그렇게 싫으면 네가 나가서 살든가" (2026-11-03)."""
+        def call():
+            result = self.structured(ALTERNATIVES_PROMPT, json.loads(self._payload(request)), AlternativesOutput, 700)
+            alternatives = [value.strip() for value in result.alternatives]
+            if len(alternatives) != 3 or len(set(alternatives)) != 3 or any(not value or len(value) > 2000 or value == request.text.strip() for value in alternatives):
+                raise ModelOutputError("순화 대안 3개가 유효하지 않습니다.")
+            return alternatives
+        alternatives = call()
+        if any(harsh(value) for value in alternatives):
+            alternatives = call()
+        kept = [value for value in alternatives if not harsh(value)]
+        if not kept:
+            raise ModelOutputError("순화 대안에 욕설이나 위협이 남았습니다.")
+        return kept
 
     def reaction(self, request):
         from app.jev import EMOTIONS

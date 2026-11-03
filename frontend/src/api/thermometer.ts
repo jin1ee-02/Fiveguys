@@ -1,11 +1,14 @@
 import type { Message, Speaker } from '../types/api';
 import type { FeatureSource, Thermometer, ThermometerLevel, Thermometers } from '../types/features';
 
-// Each person's thermometer accumulates the conflict scores of that person's own messages, like the room temperature
-// (backend/app/scoring.py) but half old + half new instead of 0.7 + 0.3, so it follows the latest message faster.
+// Each person's thermometer accumulates the conflict scores of that person's own messages (backend/app/scoring.py).
+// It rises fast and cools slowly: a harsher message moves it 80% of the way to its score, a calmer one 40%.
+// A symmetric half-and-half mix (until 2026-11-03) needed three 100-point messages in a row to reach the top stage
+// and dropped during a quarrel's peak whenever the next insult scored a little lower than the last one.
 // The room temperature keeps 0.7 / 0.3. The 40 / 60 / 80 bands are where the rewrite threshold tightens.
 export const THERMOMETER_STAGES = ['평온', '주의', '경고', '위험', '폭발'] as const;
-const ALPHA = 0.5;
+const RISE = 0.8;
+const COOL = 0.4;
 const ADVICE = [
   '차분하게 원하는 점을 이야기해보세요.',
   '불편했던 점을 구체적으로 정리해보세요.',
@@ -25,7 +28,8 @@ export function personalThermometer(subject: Speaker, scores: number[], source: 
   let temperature = 0;
   for (const score of scores) {
     previous = temperature;
-    temperature = Math.round(((1 - ALPHA) * temperature + ALPHA * score) * 10) / 10;
+    const rate = score > temperature ? RISE : COOL;
+    temperature = Math.round((temperature + rate * (score - temperature)) * 10) / 10;
   }
   const level = thermometerLevel(temperature);
   // The first message has nothing to compare with, so it shows no trend.

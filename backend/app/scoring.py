@@ -3,21 +3,28 @@
 from app.schemas import FeatureScores
 
 
-def conflict_score(features: FeatureScores) -> float:
-    """Heuristic 0-100 score. Weights are MVP defaults, not calibrated probabilities.
+# Score of a message whose strongest signal sits at each level of the 0-4 rubric (hostility 3 = direct attack,
+# 4 = strong insult or threat). Anchored to the rubric so one insult reads as an insult on the thermometer.
+SEVERITY = (0, 20, 42, 68, 90)
 
-    The strongest of hostility / sarcasm / blame carries most of the score, and the three together add breadth.
-    The earlier plain weighted sum (0.35 h + 0.25 s + 0.25 b ...) measured how many kinds of attack a message had
-    rather than how strong it was: a personal attack without sarcasm (h3 b3) stayed at 52.5 and an insult or
-    threat alone (h4) at 35, so the thermometer could not reach its upper stages (checked 2026-11-03 on a
-    20-message roommate quarrel). Sarcasm and blame count at 0.8 of hostility when they are the strongest signal."""
+
+def conflict_score(features: FeatureScores) -> float:
+    """Heuristic 0-100 score. Anchors are MVP defaults, not calibrated probabilities.
+
+    The strongest of hostility / sarcasm / blame sets the level (SEVERITY, interpolated); the other signals,
+    escalation and repair move it from there (the other signals add at most 10). Sarcasm and blame count at 0.7 of
+    hostility when they lead: with 0.8 and no cap, polite workplace sarcasm ("네네 항상 급한 업무가 있으시죠^^",
+    sarcasm 4, blame 3) scored 98, as high as swearing.
+    History: a plain weighted sum (until 2026-11-03) measured how many kinds of attack a message had; the next
+    formula (0.65 strongest + 0.25 breadth) still left an insult alone ("닥쳐 한마디만 더 하면 차단한다", h3) at 60
+    and kept the thermometer below its top stage through a quarrel with swearing (checked 2026-11-03, gpt-6-luna)."""
     h, s, b = features.hostility, features.sarcasm, features.blame
-    strongest = max(h, 0.8 * s, 0.8 * b) / 4
-    breadth = (h + s + b) / 12
-    r = features.repair / 4
-    up = max(features.escalation_delta, 0) / 2
-    down = max(-features.escalation_delta, 0) / 2
-    score = 100 * (0.65 * strongest + 0.25 * breadth + 0.10 * up - 0.25 * r - 0.10 * down)
+    level = max(h, 0.7 * s, 0.7 * b)
+    low = int(level)
+    base = float(SEVERITY[low]) if low >= 4 else SEVERITY[low] + (SEVERITY[low + 1] - SEVERITY[low]) * (level - low)
+    breadth = min(10.0, 2 * (h + s + b - level))
+    up, down = max(features.escalation_delta, 0), max(-features.escalation_delta, 0)
+    score = float(base) + breadth + 4 * up - 8 * features.repair - 3 * down
     return round(max(0.0, min(100.0, score)), 1)
 
 

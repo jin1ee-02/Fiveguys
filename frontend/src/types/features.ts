@@ -114,11 +114,28 @@ export interface PanelScore {
   defendant: Record<ScoreKey, number>;
 }
 
+// A message that decided the verdict (v10 and later).
+export interface KeyMoment {
+  index: number;
+  quote: string;
+  effect: 'worsened' | 'helped';
+  why: string;
+  speaker?: Speaker | null;
+}
+
 export interface VerdictResult {
   verdictId: string;
   mode: VerdictMode;
   plaintiff: SideScore;
   defendant: SideScore;
+  // The verdict itself (v10 and later; empty conclusion on older verdicts): A's share of the responsibility for
+  // the problem (cause) and for how the quarrel went (conduct), 0~100, B has the rest.
+  conclusion?: string;
+  causeA?: number;
+  causeReason?: string;
+  conductA?: number;
+  conductReason?: string;
+  keyMoments?: KeyMoment[];
   summary: string;
   recommendation: string;
   humor: string;

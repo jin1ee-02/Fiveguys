@@ -8,8 +8,11 @@ import { RubricTable, ScoreCard, SCORE_ITEMS } from '../components/features/Scor
 import { SourceBadge } from '../components/features/SourceBadge';
 import { ActionButton, colors, ui } from '../components/ui';
 import { useChat } from '../state/ChatContext';
+import type { Speaker } from '../types/api';
 import type { VerdictMode, VerdictRequest, VerdictResult } from '../types/features';
 
+// Same as backend/app/verdict.py VERDICT_WINDOW: a long quarrel's early admissions must stay in view.
+const VERDICT_WINDOW = 30;
 const phases = ['대화와 추가 상황 확인', '검사 · 변호사 의견 정리', '근거와 양쪽 주장 비교', '판결 카드 작성'];
 const roles = { prosecutor: '검사', defense: '변호사', factcheck: '팩트체크', judge: '판사' };
 const personas = { logic: '논리 심사', empathy: '공감 심사', evidence: '근거 심사' };
@@ -27,11 +30,12 @@ export default function VerdictScreen() {
   const [showCore, setShowCore] = useState(false);
   const [showContext, setShowContext] = useState(false);
   const [showRubric, setShowRubric] = useState(false);
+  const [showDetail, setShowDetail] = useState(false);
   const controller = useRef<AbortController | null>(null);
   const running = useRef(false);
   const finishInteraction = useRef<(() => void) | null>(null);
   const lastAttempt = useRef<{ input: VerdictRequest; requestId: string } | null>(null);
-  const recent = messages.slice(-10);
+  const recent = messages.slice(-VERDICT_WINDOW);
   const hasBoth = recent.some((turn) => turn.speaker === 'A') && recent.some((turn) => turn.speaker === 'B');
   const result = lastVerdict?.result;
 
@@ -121,7 +125,13 @@ export default function VerdictScreen() {
 
       {stage === 'result' && result && <>
         <View style={styles.resultHeader}><Text style={ui.eyebrow}>{result.mode} · {lastVerdict.snapshot.relationship}</Text><Text style={ui.subtitle}>요청한 대화 {lastVerdict.snapshot.recent_messages.length}개 기준</Text><SourceBadge source={result.source} provider={result.provider} /></View>
+        <VerdictConclusion result={result} viewer={session?.speaker ?? speaker} />
+        <Text style={ui.label}>각자 어떻게 말했나</Text>
         <View style={styles.scores}><ScoreCard title={session?.speaker === 'B' ? '상대 (A)' : '나 (A)'} score={result.plaintiff} /><ScoreCard title={session?.speaker === 'B' ? '나 (B)' : '상대 (B)'} score={result.defendant} accent="#397596" /></View>
+        <View style={ui.card}><Text style={ui.label}>판결 요약</Text><Text style={ui.subtitle}>{result.summary}</Text><Text style={ui.eyebrow}>다음 대화를 위한 제안</Text><Text style={ui.subtitle}>{result.recommendation}</Text></View>
+        {result.humor ? <View style={[ui.card, { backgroundColor: '#FFF8DA' }]}><Text style={ui.label}>한 줄로 돌아보기</Text><Text style={ui.subtitle}>{result.humor}</Text></View> : null}
+        <ActionButton title={showDetail ? '판결 과정 접기' : '판결 과정 자세히 보기 (채점 방식 · 토론 · 쟁점)'} secondary onPress={() => setShowDetail(!showDetail)} />
+        {showDetail && <>
         <View style={ui.card}>
           <Text style={ui.label}>점수는 이렇게 매겨졌어요</Text>
           <Text style={styles.caption}>A는 A가 보낸 메시지만, B는 B가 보낸 메시지만 채점합니다. 심사위원이 항목마다 실제 발화를 인용한 근거를 먼저 쓰고, 그 근거가 속한 구간 안에서 점수를 정합니다. 카드의 점수는 심사위원{result.panelScores?.length ? ` ${result.panelScores.length}명` : '단'}의 평균이고, 근거 문장은 평균에 가장 가까운 점수를 준 심사위원의 것입니다. 두 모드(WWE·UFC)의 기준은 같습니다.</Text>
@@ -153,9 +163,8 @@ export default function VerdictScreen() {
             {result.coreState.trajectory.length > 0 && <><Text style={ui.eyebrow}>갈등 궤적</Text><View style={styles.trajectory}>{result.coreState.trajectory.map((point) => <View key={point.index} style={{ alignItems: 'center', gap: 2 }}><View style={{ width: 14, height: 6 + Math.round(point.conflict * 0.32), borderRadius: 3, backgroundColor: point.speaker === 'A' ? colors.primary : '#397596' }} /><Text style={styles.caption}>{point.speaker}</Text></View>)}</View></>}
           </>}
         </View>}
-        <View style={ui.card}><Text style={ui.label}>판결 요약</Text><Text style={ui.subtitle}>{result.summary}</Text><Text style={ui.eyebrow}>다음 대화를 위한 제안</Text><Text style={ui.subtitle}>{result.recommendation}</Text></View>
-        {result.humor ? <View style={[ui.card, { backgroundColor: '#FFF8DA' }]}><Text style={ui.label}>한 줄로 돌아보기</Text><Text style={ui.subtitle}>{result.humor}</Text></View> : null}
         <View style={ui.card}><ActionButton title={showLog ? '토론 과정 접기' : '토론 과정 보기'} secondary onPress={() => setShowLog(!showLog)} />{showLog && <><Text style={styles.caption}>{result.source === 'mock' ? '역할별 발언의 UI 예시입니다.' : '역할별 에이전트가 순서대로 주고받은 발언입니다.'}</Text><ActionButton title={showStrategy ? '발언 전 전략 숨기기' : '발언 전 전략도 보기'} secondary onPress={() => setShowStrategy(!showStrategy)} />{result.debateLog.map((entry, index) => <View key={`${entry.role}-${index}`} style={styles.turn}><Text style={ui.eyebrow}>{entry.persona ? personas[entry.persona] : roles[entry.role]} · {entry.round === 0 ? '토론 전' : `${entry.round}라운드`}{typeof entry.belief === 'number' ? ` · A 쪽으로 ${Math.round(entry.belief * 100)}%` : ''}</Text>{showStrategy && entry.strategy ? <Text style={styles.strategy}>전략: {entry.strategy}</Text> : null}<Text style={ui.subtitle}>{entry.text}</Text>{entry.evidenceIndices && entry.evidenceIndices.length > 0 ? <Text style={styles.caption}>근거: {entry.evidenceIndices.map((i) => i + 1).join(', ')}번 메시지</Text> : null}</View>)}</>}</View>
+        </>}
         <ActionButton title="새 대화로 판결 요청하기" secondary onPress={() => { setContext(''); setShowContext(false); setStage('form'); }} />
         <ActionButton title="대화 이어가기" onPress={() => router.replace('/chat')} />
       </>}
@@ -166,6 +175,37 @@ export default function VerdictScreen() {
 }
 
 const arrows = { up: '↑', down: '↓', none: '확인' };
+const SIDE_COLORS: Record<Speaker, string> = { A: colors.primary, B: '#397596' };
+
+// The verdict first: who is more responsible for the problem and for the way the quarrel went, and the messages that decided it.
+function VerdictConclusion({ result, viewer }: { result: VerdictResult; viewer: Speaker }) {
+  if (!result.conclusion) return null;
+  const name = (side: Speaker) => `${side === viewer ? '나' : '상대'}(${side})`;
+  const split = (label: string, shareA: number | undefined, reason: string | undefined) => {
+    const a = Math.round(shareA ?? 50), b = 100 - a;
+    return <View style={{ gap: 4 }}>
+      <View style={[ui.row, { justifyContent: 'space-between' }]}><Text style={ui.eyebrow}>{label}</Text><Text style={styles.caption}>{name('A')} {a} : {b} {name('B')}</Text></View>
+      <View style={[styles.track, { flexDirection: 'row', height: 10, borderRadius: 5 }]}><View style={{ width: `${a}%`, backgroundColor: SIDE_COLORS.A }} /><View style={{ width: `${b}%`, backgroundColor: SIDE_COLORS.B }} /></View>
+      {reason ? <Text style={styles.caption}>{reason}</Text> : null}
+    </View>;
+  };
+  const moments = result.keyMoments ?? [];
+  return <View style={[ui.card, { borderColor: colors.primary, borderWidth: 1.5 }]}>
+    <Text style={ui.label}>판결</Text>
+    <Text style={styles.conclusion}>{result.conclusion}</Text>
+    <Text style={styles.caption}>막대는 책임의 비율입니다. 많을수록 그 사람의 책임이 큽니다.</Text>
+    {split('문제의 원인', result.causeA, result.causeReason)}
+    {split('다투는 방식', result.conductA, result.conductReason)}
+    {moments.length > 0 && <View style={{ gap: 6 }}>
+      <Text style={ui.eyebrow}>판결을 가른 메시지</Text>
+      {moments.map((moment) => <View key={moment.index} style={[styles.turn, { borderLeftWidth: 3, borderLeftColor: moment.effect === 'worsened' ? '#C85050' : '#278864' }]}>
+        <Text style={styles.caption}>{moment.speaker ? name(moment.speaker) : ''} · {moment.effect === 'worsened' ? '다툼을 키운 말' : '다툼을 수습한 말'}</Text>
+        <Text style={ui.subtitle}>“{moment.quote}”</Text>
+        <Text style={styles.caption}>{moment.why}</Text>
+      </View>)}
+    </View>}
+  </View>;
+}
 
 // What the debate changed: the panel mean before the debate next to the final one, and the points judges accepted.
 function DebateEffect({ result }: { result: VerdictResult }) {
@@ -175,7 +215,7 @@ function DebateEffect({ result }: { result: VerdictResult }) {
   const applied = points.filter((point) => point.applied);
   const others = points.filter((point) => !point.applied);
   const label = (key: string) => SCORE_ITEMS.find((item) => item.key === key)?.label ?? key;
-  const ruling = (point: (typeof points)[number]) => point.applied ? `채택 · ${point.side} ${label(point.item)} ${arrows[point.direction]}` : point.accepted ? `채택 · ${point.side} ${label(point.item)} ${arrows[point.direction]} · 점수는 그대로` : '기각';
+  const ruling = (point: (typeof points)[number]) => point.applied ? `채택 · ${point.side} ${label(point.item)} ${arrows[point.direction]}` : point.accepted ? `맞는 지적이지만 이미 점수에 반영됨 · ${point.side} ${label(point.item)}` : '기각';
   const line = (point: (typeof points)[number]) => <View key={`${point.round}-${point.persona}-${point.role}-${point.side}-${point.item}-${point.direction}-${point.claim.length}`} style={styles.turn}>
     <Text style={ui.eyebrow}>{point.round}라운드 · {personas[point.persona]} · {roles[point.role]}의 논점 {ruling(point)}</Text>
     <Text style={ui.subtitle}>{point.claim}</Text>
@@ -203,5 +243,6 @@ const styles = StyleSheet.create({
   resultHeader: { gap: 6 },
   track: { height: 6, borderRadius: 3, backgroundColor: colors.border, overflow: 'hidden' },
   trajectory: { flexDirection: 'row', alignItems: 'flex-end', gap: 6 },
+  conclusion: { color: colors.ink, fontSize: 17, lineHeight: 26, fontWeight: '800' },
   strategy: { color: colors.muted, fontSize: 12, lineHeight: 18, fontStyle: 'italic' },
 });

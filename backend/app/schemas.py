@@ -141,7 +141,8 @@ class VerdictInput(StrictModel):
     requester: Speaker
     mode: Literal["WWE", "UFC"]
     relationship: str = Field(max_length=100)
-    recent_messages: list[ChatTurn] = Field(min_length=2, max_length=10)
+    # The verdict reads up to the last 30 messages: with only 10 it missed admissions made early in a long quarrel.
+    recent_messages: list[ChatTurn] = Field(min_length=2, max_length=30)
     context: str = Field(default="", max_length=1000)
     request_id: str = Field(min_length=1, max_length=80)
 
@@ -182,11 +183,30 @@ class PanelPoint(DebatePoint):
     applied: bool = False  # this judge's score for side/item actually moved that way in this round
 
 
+class KeyMoment(StrictModel):
+    """A message that decided the verdict, quoted so the user can see exactly which words counted."""
+
+    index: int  # case.messages number
+    quote: str
+    effect: Literal["worsened", "helped"]
+    why: str
+    speaker: Speaker | None = None  # filled by the server from the message, never trusted from the model
+
+
 class JudgeOutput(StrictModel):
     # Ruled on before the scores, so the scores follow the accepted points.
     debatePoints: list[DebatePoint]
     plaintiff: SideScore  # always A, regardless of requester
     defendant: SideScore  # always B
+    # The verdict itself: who is more responsible and why. The six scores rate how each person argued;
+    # these split the responsibility for the problem (cause) and for how the quarrel went (conduct).
+    # Defaults keep verdicts stored before v10 readable.
+    keyMoments: list[KeyMoment] = Field(default_factory=list)
+    causeReason: str = ""
+    causeA: float = 50  # A's share of responsibility for the problem itself, 0~100; B has the rest
+    conductReason: str = ""
+    conductA: float = 50  # A's share of responsibility for the way the quarrel went
+    conclusion: str = ""
     summary: str
     recommendation: str
     humor: str

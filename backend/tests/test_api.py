@@ -45,8 +45,8 @@ class ApiTests(unittest.TestCase):
         })
         self.assertEqual(response.status_code, 200)
         body = response.json()
-        self.assertEqual(body["raw_conflict"], 91.7)
-        self.assertEqual(body["temperature"], 62.5)
+        self.assertEqual(body["raw_conflict"], 100)
+        self.assertEqual(body["temperature"], 65)
 
     def test_draft_only_rewrites_above_threshold(self):
         fake = FakeProvider(FeatureScores(hostility=4, sarcasm=4, blame=4, repair=0,
