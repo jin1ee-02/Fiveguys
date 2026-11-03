@@ -28,13 +28,19 @@ class ModelOutputError(Exception):
 
 class OpenAIProvider:
     def __init__(self, api_key: str, model: str):
-        self.client = OpenAI(api_key=api_key, timeout=30.0, max_retries=1)
+        self.client = OpenAI(api_key=api_key, timeout=float(os.getenv("OPENAI_TIMEOUT", "30")), max_retries=1)
         self.model = model
         self.cache_enabled = True
         # The same chat should get the same scores twice, so sampling is turned down. Leave OPENAI_TEMPERATURE
         # empty for models that do not accept the parameter (reasoning models).
         temperature = os.getenv("OPENAI_TEMPERATURE", "0").strip()
         self.options = {"temperature": float(temperature)} if temperature else {}
+        # Reasoning models: how hard to think, and extra output budget, since reasoning tokens count against
+        # max_output_tokens and the per-call limits below were sized for gpt-4o-mini's visible answer only.
+        effort = os.getenv("OPENAI_REASONING_EFFORT", "").strip()
+        if effort:
+            self.options["reasoning"] = {"effort": effort}
+        self.reasoning_tokens = int(os.getenv("OPENAI_REASONING_TOKENS", "0") or 0)
 
     def structured(self, prompt, payload, schema, tokens=1600, shared=None):
         """One schema-constrained call. Order is static prompt -> shared case -> turn payload,
@@ -48,7 +54,7 @@ class OpenAIProvider:
         with model_slot():
             response = self.client.responses.parse(
                 model=self.model, input=messages,
-                text_format=schema, max_output_tokens=tokens, store=False, **getattr(self, "options", {}),
+                text_format=schema, max_output_tokens=tokens + getattr(self, "reasoning_tokens", 0), store=False, **getattr(self, "options", {}),
             )
         log, usage = usage_log.get(), getattr(response, "usage", None)
         if log is not None and usage is not None:
